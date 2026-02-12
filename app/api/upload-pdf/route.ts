@@ -95,6 +95,7 @@ function parseVAutoText(fullText: string) {
       continue;
     }
 
+    // Body line with mileage: "Body: 4D Sport Utility 2/7/2026 99,377"
     const bodyMatch = line.match(
       /Body:\s+(.+?)\s+(?:(\d{1,2}\/\d{1,2}\/\d{4})\s+)?([0-9,]+)\s*$/
     );
@@ -103,9 +104,42 @@ function parseVAutoText(fullText: string) {
       current.mileage = bodyMatch[3].replace(/,/g, "");
       continue;
     }
+    // Body without mileage
     const bodySimple = line.match(/Body:\s+(.+)/);
     if (bodySimple && !bodyMatch) {
       current.body = bodySimple[1].trim();
+      continue;
+    }
+
+    // Standalone mileage line: just a number like "99,377" or "99377"
+    // (pdf-parse sometimes puts mileage on its own line)
+    if (!current.mileage && /^[0-9,]+$/.test(line)) {
+      const num = parseInt(line.replace(/,/g, ""), 10);
+      // Only treat as mileage if it's a reasonable mileage value (100 - 999,999)
+      if (num >= 100 && num <= 999999) {
+        current.mileage = String(num);
+        continue;
+      }
+    }
+
+    // Mileage with date prefix: "2/7/2026 99,377"
+    const dateMileageMatch = line.match(
+      /^(\d{1,2}\/\d{1,2}\/\d{4})\s+([0-9,]+)$/
+    );
+    if (dateMileageMatch && !current.mileage) {
+      current.mileage = dateMileageMatch[2].replace(/,/g, "");
+      continue;
+    }
+
+    // Explicit "Mileage:" or "Miles:" label
+    const mileageLabel = line.match(/(?:Mileage|Miles|Odometer):\s*([0-9,]+)/i);
+    if (mileageLabel) {
+      current.mileage = mileageLabel[1].replace(/,/g, "");
+      continue;
+    }
+
+    // Date-only line (skip, don't treat as anything)
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(line)) {
       continue;
     }
 
@@ -280,6 +314,9 @@ export async function POST(req: Request) {
       removed,
       skipped,
       total: vehicles.length,
+      // Debug: include text preview so we can verify parsing
+      _debug_text: fullText.substring(0, 1500),
+      _debug_first_vehicle: vehicles[0] || null,
     });
   } catch (error: any) {
     console.error("PDF upload error:", error);

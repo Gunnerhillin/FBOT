@@ -160,6 +160,11 @@ export default function Home() {
         `Synced: +${data.added || 0} new, ${data.updated || 0} updated, -${data.removed || 0} sold`,
         "success"
       );
+      // Debug: log raw PDF text to browser console for troubleshooting
+      if (data._debug_text) {
+        console.log("=== PDF RAW TEXT ===\n", data._debug_text);
+        console.log("=== FIRST VEHICLE ===\n", data._debug_first_vehicle);
+      }
       fetchVehicles();
     } catch (err) {
       console.error(err);
@@ -315,6 +320,17 @@ export default function Home() {
     }
   };
 
+  // Start the auto-poster
+  const startPoster = async () => {
+    const res = await fetch("/api/start-poster", { method: "POST" });
+    const data = await res.json();
+    if (data.error) {
+      showToast(data.error, "error");
+    } else {
+      showToast("Auto-poster started! Check the terminal window.", "success");
+    }
+  };
+
   // Queue all ready vehicles
   const queueAllReady = async () => {
     const res = await fetch("/api/queue-all", { method: "POST" });
@@ -402,6 +418,14 @@ export default function Home() {
             <button style={styles.btnHeaderAction} onClick={queueAllReady}>
               Queue All
             </button>
+            {postingStatus.queue > 0 && (
+              <button
+                style={{ ...styles.btnHeaderAction, background: "#2563eb", color: "#fff" }}
+                onClick={startPoster}
+              >
+                ▶ Start Poster
+              </button>
+            )}
             {scrapingAll ? (
               <button style={styles.btnHeaderDanger} onClick={stopScraping}>
                 Stop Scraping
