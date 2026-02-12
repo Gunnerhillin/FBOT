@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# facebook session data
+.fb-session/
+scripts/temp_photo_*
+scripts/last_post_*
+scripts/error_*

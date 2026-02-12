@@ -1,0 +1,14 @@
+{
+  "name": "fb-poster-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fb-login": "node scripts/fb-login.mjs",
+    "poster": "node scripts/fb-poster.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.95.3",
+    "playwright": "^1.50.0"
+  }
+}

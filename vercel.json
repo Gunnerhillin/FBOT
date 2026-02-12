@@ -1,0 +1,15 @@
+{
+  "buildCommand": "next build",
+  "framework": "nextjs",
+  "functions": {
+    "app/api/scrape-photos/route.ts": {
+      "maxDuration": 120
+    },
+    "app/api/scrape-all-photos/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/upload-pdf/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

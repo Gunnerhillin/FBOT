@@ -1,0 +1,42 @@
+# ── FB Marketplace Poster Service ──
+# Runs on Railway (or any Docker host) alongside the Vercel web UI.
+# Includes Playwright + Chromium and a noVNC web desktop for initial FB login.
+
+FROM mcr.microsoft.com/playwright:v1.50.0-noble
+
+# Install noVNC + VNC server for web-based browser access
+RUN apt-get update && apt-get install -y \
+    x11vnc \
+    xvfb \
+    fluxbox \
+    novnc \
+    websockify \
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy only what the poster needs
+COPY package-poster.json ./package.json
+COPY scripts/ ./scripts/
+COPY .env.local ./.env.local
+
+# Install poster dependencies
+RUN npm install
+
+# Create session directory
+RUN mkdir -p /app/.fb-session
+
+# Supervisor config to manage VNC + noVNC + poster
+COPY poster-supervisor.conf /etc/supervisor/conf.d/poster.conf
+
+# Startup script
+COPY scripts/start-poster.sh /app/start-poster.sh
+RUN chmod +x /app/start-poster.sh
+
+# noVNC web port
+EXPOSE 6080
+# Optional: direct VNC port
+EXPOSE 5900
+
+CMD ["/app/start-poster.sh"]

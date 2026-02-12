@@ -6,12 +6,15 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "fb-login": "node scripts/fb-login.mjs",
+    "poster": "node scripts/fb-poster.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
     "next": "16.1.6",
     "openai": "^6.21.0",
+    "pdfjs-dist": "^5.4.624",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },
