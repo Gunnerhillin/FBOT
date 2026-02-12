@@ -1,11 +1,48 @@
 export const runtime = "nodejs";
 
+// Polyfill browser APIs that pdfjs-dist needs on serverless (Vercel)
+if (typeof globalThis.DOMMatrix === "undefined") {
+  (globalThis as any).DOMMatrix = class DOMMatrix {
+    a = 1; b = 0; c = 0; d = 1; e = 0; f = 0;
+    m11 = 1; m12 = 0; m13 = 0; m14 = 0;
+    m21 = 0; m22 = 1; m23 = 0; m24 = 0;
+    m31 = 0; m32 = 0; m33 = 1; m34 = 0;
+    m41 = 0; m42 = 0; m43 = 0; m44 = 1;
+    is2D = true; isIdentity = true;
+    constructor(init?: any) {
+      if (Array.isArray(init) && init.length === 6) {
+        this.a = init[0]; this.b = init[1]; this.c = init[2];
+        this.d = init[3]; this.e = init[4]; this.f = init[5];
+      }
+    }
+    inverse() { return new DOMMatrix(); }
+    multiply() { return new DOMMatrix(); }
+    scale() { return new DOMMatrix(); }
+    translate() { return new DOMMatrix(); }
+    transformPoint() { return { x: 0, y: 0, z: 0, w: 1 }; }
+  };
+}
+if (typeof globalThis.Path2D === "undefined") {
+  (globalThis as any).Path2D = class Path2D {
+    constructor() {}
+    addPath() {}
+    moveTo() {}
+    lineTo() {}
+    closePath() {}
+    rect() {}
+    arc() {}
+    bezierCurveTo() {}
+    quadraticCurveTo() {}
+    ellipse() {}
+  };
+}
+
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
 /**
@@ -175,15 +212,9 @@ function parseVAutoText(fullText: string) {
 
 export async function POST(req: Request) {
   try {
-    // Import legacy Node build of pdfjs with worker
+    // Import legacy Node build of pdfjs — disable worker for serverless
     const pdfjsLib: any = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    const path = await import("path");
-    const { pathToFileURL } = await import("url");
-    const workerPath = path.resolve(
-      process.cwd(),
-      "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
-    );
-    pdfjsLib.GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "";
 
     const formData = await req.formData();
     const file = formData.get("file");
