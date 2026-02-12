@@ -150,19 +150,22 @@ export default function Home() {
       const data = await res.json();
       if (data.error) {
         showToast(data.error, "error");
-      } else {
-        const now = new Date().toISOString();
-        localStorage.setItem("lastVAutoUpload", now);
-        setLastUpload(now);
-        showToast(
-          `Synced: +${data.added || 0} new, ${data.updated || 0} updated, -${data.removed || 0} sold`,
-          "success"
-        );
-        fetchVehicles();
+        setUploadProgress("");
+        return; // Keep file selected so user can retry
       }
+      const now = new Date().toISOString();
+      localStorage.setItem("lastVAutoUpload", now);
+      setLastUpload(now);
+      showToast(
+        `Synced: +${data.added || 0} new, ${data.updated || 0} updated, -${data.removed || 0} sold`,
+        "success"
+      );
+      fetchVehicles();
     } catch (err) {
       console.error(err);
-      showToast("Upload failed", "error");
+      showToast("Upload failed — try again", "error");
+      setUploadProgress("");
+      return; // Keep file selected so user can retry
     }
     setUploadProgress("");
     setPdfFile(null);
