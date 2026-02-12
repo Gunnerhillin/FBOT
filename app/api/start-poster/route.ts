@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { exec } from "child_process";
+import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { join } from "path";
 
@@ -39,10 +39,10 @@ export async function POST() {
 
   // Spawn the poster as a detached background process
   try {
-    const child = exec(`node "${posterScript}"`, {
+    const child = spawn("node", [posterScript], {
       cwd: projectRoot,
       detached: true,
-      windowsHide: false,
+      stdio: "ignore",
     });
 
     child.unref(); // Let it run independently
