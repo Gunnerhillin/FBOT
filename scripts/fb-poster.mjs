@@ -131,6 +131,133 @@ async function updateVehicleStatus(id, status, listingUrl = null) {
   await supabase.from("vehicles").update(update).eq("id", id);
 }
 
+// ── Helpers for robust form interaction ──
+
+/**
+ * Try multiple selectors to find a form field. Facebook changes their DOM often,
+ * so we try aria-label, placeholder, label text, and role-based selectors.
+ */
+async function findField(page, fieldName, extraSelectors = []) {
+  const selectors = [
+    `[aria-label="${fieldName}"]`,
+    `[aria-label="${fieldName}" i]`,
+    `input[placeholder="${fieldName}"]`,
+    `input[placeholder="${fieldName}" i]`,
+    `textarea[placeholder="${fieldName}"]`,
+    `[data-testid*="${fieldName.toLowerCase()}"]`,
+    ...extraSelectors,
+  ];
+
+  for (const sel of selectors) {
+    try {
+      const el = page.locator(sel).first();
+      if (await el.count() > 0 && await el.isVisible()) {
+        log(`    Found "${fieldName}" via: ${sel}`);
+        return el;
+      }
+    } catch {}
+  }
+
+  // Fallback: try getByLabel and getByPlaceholder
+  try {
+    const byLabel = page.getByLabel(fieldName, { exact: false }).first();
+    if (await byLabel.count() > 0 && await byLabel.isVisible()) {
+      log(`    Found "${fieldName}" via getByLabel`);
+      return byLabel;
+    }
+  } catch {}
+
+  try {
+    const byPlaceholder = page.getByPlaceholder(fieldName, { exact: false }).first();
+    if (await byPlaceholder.count() > 0 && await byPlaceholder.isVisible()) {
+      log(`    Found "${fieldName}" via getByPlaceholder`);
+      return byPlaceholder;
+    }
+  } catch {}
+
+  log(`    WARNING: Could not find field "${fieldName}"`);
+  return null;
+}
+
+/**
+ * Type text character-by-character with random delays (more human-like,
+ * better at triggering Facebook's dropdown suggestions).
+ */
+async function humanType(page, text) {
+  for (const char of text) {
+    await page.keyboard.type(char, { delay: 30 + Math.random() * 50 });
+  }
+}
+
+/**
+ * Fill a dropdown/combobox field: click, clear, type, wait for dropdown, select.
+ */
+async function fillDropdown(page, fieldName, value, extraSelectors = []) {
+  log(`  Filling ${fieldName}...`);
+  const field = await findField(page, fieldName, extraSelectors);
+  if (!field) return false;
+
+  try {
+    await field.click();
+    await sleep(300);
+
+    // Clear existing text
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Backspace");
+    await sleep(200);
+
+    // Type human-like to trigger dropdown
+    await humanType(page, value);
+    await sleep(1200); // Wait for dropdown suggestions
+
+    // Try clicking the dropdown option that matches
+    const option = page.locator(`[role="option"]:has-text("${value}")`).first();
+    if (await option.count() > 0) {
+      await option.click();
+      log(`    Selected dropdown option for "${value}"`);
+    } else {
+      // Fallback: try listbox items
+      const listItem = page.locator(`[role="listbox"] >> text="${value}"`).first();
+      if (await listItem.count() > 0) {
+        await listItem.click();
+        log(`    Selected listbox item for "${value}"`);
+      } else {
+        // Last resort: press ArrowDown + Enter to select first suggestion
+        await page.keyboard.press("ArrowDown");
+        await sleep(200);
+        await page.keyboard.press("Enter");
+        log(`    Used keyboard to select first suggestion for "${value}"`);
+      }
+    }
+    await sleep(500);
+    return true;
+  } catch (err) {
+    log(`    Error filling ${fieldName}: ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * Fill a simple text input field (no dropdown).
+ */
+async function fillTextField(page, fieldName, value, extraSelectors = []) {
+  log(`  Filling ${fieldName}...`);
+  const field = await findField(page, fieldName, extraSelectors);
+  if (!field) return false;
+
+  try {
+    await field.click();
+    await sleep(200);
+    // Use fill() for plain text fields — much faster than typing char by char
+    await field.fill(String(value));
+    await sleep(300);
+    return true;
+  } catch (err) {
+    log(`    Error filling ${fieldName}: ${err.message}`);
+    return false;
+  }
+}
+
 // ── Facebook Marketplace Posting ──
 async function postVehicleToMarketplace(page, vehicle) {
   const title = `${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim || ""}`.trim();
@@ -142,189 +269,227 @@ async function postVehicleToMarketplace(page, vehicle) {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
-    await sleep(3000 + Math.random() * 2000);
+    await sleep(3000 + Math.random() * 1000);
 
-    // ── Upload Photos ──
+    // Debug: log all visible aria-labels so we know what's on the page
+    try {
+      const labels = await page.evaluate(() => {
+        const els = document.querySelectorAll("[aria-label]");
+        return [...els]
+          .filter((el) => el.offsetParent !== null)
+          .map((el) => ({
+            tag: el.tagName,
+            label: el.getAttribute("aria-label"),
+            role: el.getAttribute("role"),
+            placeholder: el.getAttribute("placeholder"),
+          }))
+          .slice(0, 40);
+      });
+      log(`  Page aria-labels found: ${JSON.stringify(labels, null, 0).slice(0, 500)}`);
+    } catch {}
+
+    // ── Upload Photos (batch) ──
     if (vehicle.photos && vehicle.photos.length > 0) {
-      log(`  Uploading ${vehicle.photos.length} photos...`);
+      const photoCount = Math.min(vehicle.photos.length, 20);
+      log(`  Downloading ${photoCount} photos...`);
 
-      // Find the photo upload input
-      const fileInput = await page.locator('input[type="file"][accept*="image"]').first();
+      const { writeFileSync, unlinkSync } = await import("fs");
+      const tempPaths = [];
 
-      // Download photos to temp and upload
-      for (let i = 0; i < Math.min(vehicle.photos.length, 20); i++) {
+      // Download all photos first (parallel for speed)
+      const downloads = vehicle.photos.slice(0, 20).map(async (url, i) => {
         try {
-          const photoUrl = vehicle.photos[i];
-          const response = await fetch(photoUrl);
-          if (!response.ok) continue;
-
+          const response = await fetch(url);
+          if (!response.ok) return null;
           const buffer = Buffer.from(await response.arrayBuffer());
           const tempPath = join(__dirname, `temp_photo_${i}.jpg`);
-          const { writeFileSync, unlinkSync } = await import("fs");
           writeFileSync(tempPath, buffer);
+          return tempPath;
+        } catch {
+          return null;
+        }
+      });
+      const results = await Promise.all(downloads);
+      for (const p of results) {
+        if (p) tempPaths.push(p);
+      }
 
-          await fileInput.setInputFiles(tempPath);
-          await sleep(2000 + Math.random() * 1000);
+      if (tempPaths.length > 0) {
+        log(`  Uploading ${tempPaths.length} photos in batch...`);
+        const fileInput = page.locator('input[type="file"][accept*="image"]').first();
+        await fileInput.setInputFiles(tempPaths);
+        await sleep(3000 + tempPaths.length * 300); // Scale wait with photo count
 
-          // Clean up temp file
-          try { unlinkSync(tempPath); } catch {}
-        } catch (photoErr) {
-          log(`  Photo ${i + 1} upload failed: ${photoErr.message}`);
+        // Clean up temp files
+        for (const p of tempPaths) {
+          try { unlinkSync(p); } catch {}
         }
       }
-      await sleep(3000);
+      log(`  Photos uploaded`);
     }
 
     // ── Fill Vehicle Details ──
 
-    // Year
-    log("  Filling year...");
-    const yearInput = page.locator('[aria-label="Year"]').first();
-    if (await yearInput.count()) {
-      await yearInput.click();
-      await sleep(500);
-      await yearInput.fill(String(vehicle.year));
-      await sleep(1000);
-      // Select from dropdown
-      await page.keyboard.press("Enter");
-      await sleep(1000);
+    // Vehicle type (first field on the form — Car/Truck, SUV, etc.)
+    // Map common body types from vAuto to FB Marketplace categories
+    const bodyToType = {
+      "4D Sport Utility": "SUV/Crossover",
+      "Sport Utility": "SUV/Crossover",
+      "SUV": "SUV/Crossover",
+      "4D Crew Cab": "Truck",
+      "Crew Cab": "Truck",
+      "Regular Cab": "Truck",
+      "Extended Cab": "Truck",
+      "4D Sedan": "Sedan",
+      "Sedan": "Sedan",
+      "4D Hatchback": "Hatchback",
+      "Hatchback": "Hatchback",
+      "2D Coupe": "Coupe",
+      "Coupe": "Coupe",
+      "4D Passenger Van": "Van/Minivan",
+      "Van": "Van/Minivan",
+      "Minivan": "Van/Minivan",
+      "Convertible": "Convertible",
+      "Wagon": "Wagon",
+    };
+    let vehicleType = "Car/Truck"; // default
+    if (vehicle.body) {
+      for (const [key, val] of Object.entries(bodyToType)) {
+        if (vehicle.body.toLowerCase().includes(key.toLowerCase())) {
+          vehicleType = val;
+          break;
+        }
+      }
     }
+    log(`  Setting vehicle type: ${vehicleType} (from body: ${vehicle.body || "none"})`);
+    await fillDropdown(page, "Vehicle type", vehicleType, [
+      '[aria-label="Vehicle type"]',
+      '[aria-label="Type"]',
+      '[aria-label="Category"]',
+    ]);
 
-    // Make
-    log("  Filling make...");
-    const makeInput = page.locator('[aria-label="Make"]').first();
-    if (await makeInput.count()) {
-      await makeInput.click();
-      await sleep(500);
-      await makeInput.fill(vehicle.make);
-      await sleep(1500);
-      await page.keyboard.press("Enter");
-      await sleep(1000);
-    }
+    // Year (dropdown)
+    await fillDropdown(page, "Year", String(vehicle.year));
 
-    // Model
-    log("  Filling model...");
-    const modelInput = page.locator('[aria-label="Model"]').first();
-    if (await modelInput.count()) {
-      await modelInput.click();
-      await sleep(500);
-      await modelInput.fill(vehicle.model);
-      await sleep(1500);
-      await page.keyboard.press("Enter");
-      await sleep(1000);
-    }
+    // Make (dropdown)
+    await fillDropdown(page, "Make", vehicle.make);
 
-    // Trim (if available)
+    // Model (dropdown)
+    await fillDropdown(page, "Model", vehicle.model);
+
+    // Trim (dropdown, optional)
     if (vehicle.trim) {
-      log("  Filling trim...");
-      const trimInput = page.locator('[aria-label="Trim"]').first();
-      if (await trimInput.count()) {
-        await trimInput.click();
-        await sleep(500);
-        await trimInput.fill(vehicle.trim);
-        await sleep(1500);
-        await page.keyboard.press("Enter");
-        await sleep(1000);
-      }
+      await fillDropdown(page, "Trim", vehicle.trim);
     }
 
-    // Price
-    log("  Filling price...");
-    const priceInput = page.locator('[aria-label="Price"]').first();
-    if (await priceInput.count()) {
-      await priceInput.click();
-      await priceInput.fill(String(vehicle.price || 0));
-      await sleep(500);
-    }
+    // Price (text field)
+    await fillTextField(page, "Price", vehicle.price || 0);
 
-    // Mileage
+    // Mileage (text field)
     if (vehicle.mileage) {
-      log("  Filling mileage...");
-      const mileageInput = page.locator('[aria-label="Mileage"]').first();
-      if (await mileageInput.count()) {
-        await mileageInput.click();
-        await mileageInput.fill(String(vehicle.mileage));
-        await sleep(500);
-      }
+      await fillTextField(page, "Mileage", vehicle.mileage);
     }
 
-    // Description
+    // Description (textarea)
     if (vehicle.description_a) {
       log("  Filling description...");
-      const descInput = page.locator('[aria-label="Description"]').first();
-      if (await descInput.count()) {
-        await descInput.click();
-        await descInput.fill(vehicle.description_a);
+      const descField = await findField(page, "Description", [
+        'textarea[aria-label*="escription"]',
+        '[role="textbox"][aria-label*="escription"]',
+      ]);
+      if (descField) {
+        await descField.click();
+        await sleep(300);
+        // Use fill() for long text — faster and more reliable
+        await descField.fill(vehicle.description_a);
         await sleep(500);
       }
     }
 
-    // Location — type dealership city
-    const locationInput = page.locator('[aria-label="Location"]').first();
-    if (await locationInput.count()) {
-      log("  Setting location to St. George, UT...");
-      await locationInput.click();
-      await locationInput.fill("St. George, UT");
-      await sleep(2000);
-      await page.keyboard.press("Enter");
-      await sleep(1000);
-    }
+    // Location
+    log("  Setting location...");
+    await fillDropdown(page, "Location", "St. George, UT", [
+      '[aria-label*="ocation"]',
+    ]);
 
-    // ── VIN field (if visible) ──
+    // VIN (text field)
     if (vehicle.vin) {
-      const vinInput = page.locator('[aria-label="VIN"]').first();
-      if (await vinInput.count()) {
-        log("  Filling VIN...");
-        await vinInput.click();
-        await vinInput.fill(vehicle.vin);
-        await sleep(500);
-      }
+      await fillTextField(page, "VIN", vehicle.vin, [
+        'input[aria-label*="VIN"]',
+        'input[aria-label*="vin"]',
+      ]);
     }
+
+    // Transmission (try to set if visible)
+    await fillDropdown(page, "Transmission", "Automatic", [
+      '[aria-label*="ransmission"]',
+    ]);
+
+    // Fuel type (try if visible)
+    await fillDropdown(page, "Fuel type", "Gasoline", [
+      '[aria-label*="uel"]',
+    ]);
 
     await sleep(2000);
 
     // Take a screenshot for debugging
     const screenshotPath = join(__dirname, `last_post_${vehicle.vin || "unknown"}.png`);
-    await page.screenshot({ path: screenshotPath, fullPage: false });
+    await page.screenshot({ path: screenshotPath, fullPage: true });
     log(`  Screenshot saved: ${screenshotPath}`);
 
     // ── Click "Next" or "Publish" ──
-    log("  Looking for publish button...");
+    log("  Looking for Next/Publish button...");
 
-    // Try clicking "Next" first (multi-step form)
-    const nextBtn = page.locator('div[aria-label="Next"], span:has-text("Next")').first();
-    if (await nextBtn.count()) {
+    // Try "Next" button (multi-step form)
+    const nextBtn = page.locator('[aria-label="Next"]').first();
+    if (await nextBtn.count() > 0 && await nextBtn.isVisible()) {
       await nextBtn.click();
+      log("  Clicked Next");
       await sleep(3000);
+    } else {
+      // Try text-based fallback
+      const nextText = page.getByRole("button", { name: "Next" }).first();
+      if (await nextText.count() > 0) {
+        await nextText.click();
+        log("  Clicked Next (text match)");
+        await sleep(3000);
+      }
     }
 
-    // Then look for Publish
-    const publishBtn = page.locator(
-      'div[aria-label="Publish"], span:has-text("Publish")'
-    ).first();
-    if (await publishBtn.count()) {
+    // Look for Publish button
+    const publishBtn = page.locator('[aria-label="Publish"]').first();
+    if (await publishBtn.count() > 0 && await publishBtn.isVisible()) {
       await publishBtn.click();
       log("  Clicked Publish!");
       await sleep(5000);
     } else {
-      log("  WARNING: Could not find Publish button. Check screenshot.");
-      return { success: false, error: "Publish button not found" };
+      // Text-based fallback
+      const publishText = page.getByRole("button", { name: "Publish" }).first();
+      if (await publishText.count() > 0) {
+        await publishText.click();
+        log("  Clicked Publish (text match)!");
+        await sleep(5000);
+      } else {
+        log("  WARNING: Could not find Publish button. Check screenshot.");
+        await page.screenshot({
+          path: join(__dirname, `no_publish_${vehicle.vin || "unknown"}.png`),
+          fullPage: true,
+        });
+        return { success: false, error: "Publish button not found" };
+      }
     }
 
-    // Try to get the listing URL from the page
     const currentUrl = page.url();
-    const listingUrl = currentUrl.includes("marketplace")
-      ? currentUrl
-      : null;
+    const listingUrl = currentUrl.includes("marketplace") ? currentUrl : null;
 
     log(`  SUCCESS: ${title} posted!`);
     return { success: true, listingUrl };
   } catch (err) {
     log(`  FAILED: ${err.message}`);
-    // Save error screenshot
     try {
       await page.screenshot({
         path: join(__dirname, `error_${vehicle.vin || "unknown"}.png`),
+        fullPage: true,
       });
     } catch {}
     return { success: false, error: err.message };
