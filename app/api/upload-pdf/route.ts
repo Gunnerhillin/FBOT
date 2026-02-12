@@ -212,9 +212,11 @@ function parseVAutoText(fullText: string) {
 
 export async function POST(req: Request) {
   try {
-    // Import legacy Node build of pdfjs — disable worker for serverless
+    // Import legacy Node build of pdfjs
+    // Pre-import worker so bundler includes it, then set workerSrc for pdfjs to find it
+    await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
     const pdfjsLib: any = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "";
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "pdfjs-dist/legacy/build/pdf.worker.mjs";
 
     const formData = await req.formData();
     const file = formData.get("file");
