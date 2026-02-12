@@ -10,7 +10,49 @@ const supabase = createClient(
 );
 
 /**
+ * Custom page renderer that preserves the tabular layout by grouping text
+ * items by their Y position (just like pdftotext -layout does).
+ * This is critical for vAuto PDFs which are multi-column tables.
+ */
+function layoutRenderer(pageData: any) {
+  return pageData.getTextContent().then(function (textContent: any) {
+    const lineMap = new Map<number, { x: number; str: string }[]>();
+
+    for (const item of textContent.items) {
+      if (!item.str || item.str.trim() === "") continue;
+      // Round Y to nearest 2px to group items on the same visual line
+      const y = Math.round(item.transform[5] / 2) * 2;
+      const x = item.transform[4];
+
+      if (!lineMap.has(y)) {
+        lineMap.set(y, []);
+      }
+      lineMap.get(y)!.push({ x, str: item.str });
+    }
+
+    // Sort lines top-to-bottom (highest Y first in PDF coords)
+    const sortedYs = [...lineMap.keys()].sort((a, b) => b - a);
+    let text = "";
+
+    for (const y of sortedYs) {
+      const items = lineMap.get(y)!;
+      items.sort((a, b) => a.x - b.x);
+      const lineText = items.map((it) => it.str).join(" ");
+      text += lineText + "\n";
+    }
+
+    return text;
+  });
+}
+
+/**
  * Parse vAuto "Pricing (Default)" PDF text into vehicle records.
+ *
+ * With layout-preserving extraction, each vehicle appears as a row like:
+ *   2015 Dodge Charger SXT   Body: 4D Sedan   $14,495 2/9/2026   87,159
+ *   Stock #: N04379C         Color: Billet Silver Metallic Clearcoat
+ *   VIN: 2C3CDXJG1FH828315
+ *   Class: Car, Intermediate
  */
 function parseVAutoText(fullText: string) {
   const lines = fullText
@@ -36,34 +78,29 @@ function parseVAutoText(fullText: string) {
       line.includes("vAuto, Inc.") ||
       line.includes("http://www.vauto.com") ||
       line.includes("(877) 828-8614") ||
-      /^Page \d+ of \d+$/.test(line)
+      /^Page \d+ of \d+$/.test(line) ||
+      line === "Body" ||
+      line === "Price / % Mkt" ||
+      line === "Last $ Change" ||
+      line === "Odometer"
     );
   };
 
   for (const line of lines) {
     if (isHeaderFooter(line)) continue;
 
-    const vehicleNameMatch = line.match(/^(\d{4})\s+([A-Z][a-zA-Z].*)/);
+    // Detect vehicle name line: starts with 4-digit year followed by make/model
+    // In layout mode, this line may also contain Body:, price, and mileage
+    const vehicleNameMatch = line.match(/^(\d{4})\s+([A-Z][a-zA-Z][\s\S]*?)(?:\s+Body:|$)/);
     if (
       vehicleNameMatch &&
-      !line.includes("Body:") &&
       !line.startsWith("$") &&
-      !line.includes("Stock") &&
-      !line.includes("VIN:") &&
-      !line.includes("Color:") &&
-      !line.includes("Class:")
+      !line.match(/^(\d{4})\s+(Stock|VIN:|Color:|Class:)/)
     ) {
       flushCurrent();
 
       const year = vehicleNameMatch[1];
       let nameRaw = vehicleNameMatch[2].trim();
-
-      let inlinePrice = "";
-      const inlinePriceMatch = nameRaw.match(/\s+\$([0-9,]+)\s*$/);
-      if (inlinePriceMatch) {
-        inlinePrice = inlinePriceMatch[1].replace(/,/g, "");
-        nameRaw = nameRaw.replace(/\s+\$[0-9,]+\s*$/, "").trim();
-      }
 
       const nameParts = nameRaw.split(/\s+/);
       const make = nameParts[0];
@@ -76,7 +113,7 @@ function parseVAutoText(fullText: string) {
         trim: "",
         vin: "",
         stock_number: "",
-        price: inlinePrice,
+        price: "",
         mileage: "",
         body: "",
         color: "",
@@ -84,90 +121,113 @@ function parseVAutoText(fullText: string) {
         recall_status: "",
         disposition: "",
       };
+
+      // In layout mode, the same line may contain Body:, Price, and Mileage
+      // e.g. "2015 Dodge Charger SXT Body: 4D Sedan $14,495 2/9/2026 87,159"
+      const bodyInline = line.match(/Body:\s+([^\$]+)/);
+      if (bodyInline) {
+        current.body = bodyInline[1].trim();
+      }
+
+      const priceInline = line.match(/\$([0-9,]+)/);
+      if (priceInline) {
+        current.price = priceInline[1].replace(/,/g, "");
+      }
+
+      // Mileage is typically the last number on the line (after the date)
+      const mileageInline = line.match(/\d{1,2}\/\d{1,2}\/\d{4}\s+([0-9,]+)/);
+      if (mileageInline) {
+        current.mileage = mileageInline[1].replace(/,/g, "");
+      }
+
       continue;
     }
 
     if (!current) continue;
 
-    const priceMatch = line.match(/^\$([0-9,]+)/);
-    if (priceMatch) {
-      current.price = priceMatch[1].replace(/,/g, "");
-      continue;
+    // Price line (if not already captured inline)
+    if (!current.price) {
+      const priceMatch = line.match(/\$([0-9,]+)/);
+      if (priceMatch) {
+        current.price = priceMatch[1].replace(/,/g, "");
+
+        // Check for mileage after date on same line: "$14,495 2/9/2026 87,159"
+        const mileageAfterDate = line.match(/\d{1,2}\/\d{1,2}\/\d{4}\s+([0-9,]+)/);
+        if (mileageAfterDate && !current.mileage) {
+          current.mileage = mileageAfterDate[1].replace(/,/g, "");
+        }
+        continue;
+      }
     }
 
-    // Body line with mileage: "Body: 4D Sport Utility 2/7/2026 99,377"
-    const bodyMatch = line.match(
-      /Body:\s+(.+?)\s+(?:(\d{1,2}\/\d{1,2}\/\d{4})\s+)?([0-9,]+)\s*$/
-    );
-    if (bodyMatch) {
-      current.body = bodyMatch[1].trim();
-      current.mileage = bodyMatch[3].replace(/,/g, "");
-      continue;
-    }
-    // Body without mileage
-    const bodySimple = line.match(/Body:\s+(.+)/);
-    if (bodySimple && !bodyMatch) {
-      current.body = bodySimple[1].trim();
-      continue;
+    // Body line (if not already captured inline)
+    if (!current.body) {
+      const bodyMatch = line.match(/Body:\s+(.+?)(?:\s+\$|\s*$)/);
+      if (bodyMatch) {
+        current.body = bodyMatch[1].trim();
+
+        // Also check for price and mileage on this line
+        const priceOnBody = line.match(/\$([0-9,]+)/);
+        if (priceOnBody && !current.price) {
+          current.price = priceOnBody[1].replace(/,/g, "");
+        }
+        const mileageOnBody = line.match(/\d{1,2}\/\d{1,2}\/\d{4}\s+([0-9,]+)/);
+        if (mileageOnBody && !current.mileage) {
+          current.mileage = mileageOnBody[1].replace(/,/g, "");
+        }
+        continue;
+      }
     }
 
-    // Standalone mileage line: just a number like "99,377" or "99377"
-    // (pdf-parse sometimes puts mileage on its own line)
+    // Standalone mileage line
     if (!current.mileage && /^[0-9,]+$/.test(line)) {
       const num = parseInt(line.replace(/,/g, ""), 10);
-      // Only treat as mileage if it's a reasonable mileage value (100 - 999,999)
       if (num >= 100 && num <= 999999) {
         current.mileage = String(num);
         continue;
       }
     }
 
-    // Mileage with date prefix: "2/7/2026 99,377"
-    const dateMileageMatch = line.match(
-      /^(\d{1,2}\/\d{1,2}\/\d{4})\s+([0-9,]+)$/
-    );
-    if (dateMileageMatch && !current.mileage) {
-      current.mileage = dateMileageMatch[2].replace(/,/g, "");
-      continue;
+    // Date + mileage: "2/7/2026 99,377"
+    if (!current.mileage) {
+      const dateMileage = line.match(/\d{1,2}\/\d{1,2}\/\d{4}\s+([0-9,]+)/);
+      if (dateMileage) {
+        current.mileage = dateMileage[1].replace(/,/g, "");
+        continue;
+      }
     }
 
-    // Explicit "Mileage:" or "Miles:" label
-    const mileageLabel = line.match(/(?:Mileage|Miles|Odometer):\s*([0-9,]+)/i);
-    if (mileageLabel) {
-      current.mileage = mileageLabel[1].replace(/,/g, "");
-      continue;
-    }
-
-    // Date-only line (skip, don't treat as anything)
-    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(line)) {
-      continue;
-    }
-
+    // Stock #
     const stockMatch = line.match(/Stock\s*#:\s*(\S+)/);
     if (stockMatch) {
       current.stock_number = stockMatch[1];
     }
 
+    // VIN
     const vinMatch = line.match(/VIN:\s*(\S+)/);
     if (vinMatch) {
       current.vin = vinMatch[1];
     }
 
+    // Color
     const colorMatch = line.match(/Color:\s*(.+)/);
     if (colorMatch) {
       current.color = colorMatch[1].trim();
     }
 
+    // Class
     const classMatch = line.match(/Class:\s*(.+)/);
     if (classMatch) {
       current.vehicle_class = classMatch[1].trim();
     }
 
+    // Recall Status
     const recallMatch = line.match(/Recall Status:\s*(.+)/);
     if (recallMatch) {
       current.recall_status = recallMatch[1].trim();
     }
 
+    // Disposition
     const dispMatch = line.match(/Disp:\s*(.+)/);
     if (dispMatch) {
       current.disposition = dispMatch[1].trim();
@@ -193,8 +253,10 @@ export async function POST(req: Request) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Use pdf-parse — no web workers needed, works on serverless
-    const pdfResult = await pdfParse(buffer);
+    // Use pdf-parse with custom layout renderer to preserve table structure
+    const pdfResult = await pdfParse(buffer, {
+      pagerender: layoutRenderer,
+    });
     const fullText = pdfResult.text;
 
     console.log("--- Extracted PDF text (first 2000 chars) ---");
@@ -204,6 +266,9 @@ export async function POST(req: Request) {
     const vehicles = parseVAutoText(fullText);
 
     console.log(`Parsed ${vehicles.length} vehicles from PDF`);
+    if (vehicles.length > 0) {
+      console.log("First vehicle:", JSON.stringify(vehicles[0]));
+    }
 
     if (vehicles.length === 0) {
       return NextResponse.json(
@@ -314,7 +379,6 @@ export async function POST(req: Request) {
       removed,
       skipped,
       total: vehicles.length,
-      // Debug: include text preview so we can verify parsing
       _debug_text: fullText.substring(0, 1500),
       _debug_first_vehicle: vehicles[0] || null,
     });

@@ -524,6 +524,27 @@ export default function Home() {
                 Delete All Inventory
               </button>
             </div>
+
+            <div style={styles.toolCard}>
+              <h3 style={styles.toolTitle}>Setup Scripts</h3>
+              <p style={{ color: "#888", fontSize: "13px", marginBottom: "12px" }}>
+                Download these to set up a new computer or run the auto-poster.
+              </p>
+              <a
+                href="/install.bat"
+                download="install.bat"
+                style={{ ...styles.btnPrimary, display: "block", textAlign: "center", textDecoration: "none", marginBottom: "8px" }}
+              >
+                Download Installer
+              </a>
+              <a
+                href="/run-poster.bat"
+                download="run-poster.bat"
+                style={{ ...styles.btnPrimary, display: "block", textAlign: "center", textDecoration: "none", background: "#2563eb" }}
+              >
+                Download Auto-Poster
+              </a>
+            </div>
           </div>
         </div>
       )}
