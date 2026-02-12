@@ -1,12 +1,8 @@
 import { NextResponse } from "next/server";
-import { spawn } from "child_process";
-import { existsSync } from "fs";
-import { join } from "path";
 
 export async function POST() {
   // Only works locally — Vercel doesn't have Playwright
-  const isVercel = !!process.env.VERCEL;
-  if (isVercel) {
+  if (process.env.VERCEL) {
     return NextResponse.json(
       {
         error:
@@ -15,6 +11,11 @@ export async function POST() {
       { status: 400 }
     );
   }
+
+  // Dynamic imports so Vercel's bundler doesn't try to resolve them at build time
+  const { spawn } = await import("child_process");
+  const { existsSync } = await import("fs");
+  const { join } = await import("path");
 
   const projectRoot = process.cwd();
   const posterScript = join(projectRoot, "scripts", "fb-poster.mjs");
@@ -37,7 +38,6 @@ export async function POST() {
     );
   }
 
-  // Spawn the poster as a detached background process
   try {
     const child = spawn("node", [posterScript], {
       cwd: projectRoot,
@@ -45,7 +45,7 @@ export async function POST() {
       stdio: "ignore",
     });
 
-    child.unref(); // Let it run independently
+    child.unref();
 
     return NextResponse.json({
       success: true,
