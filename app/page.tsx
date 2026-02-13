@@ -167,8 +167,8 @@ export default function Home() {
       );
       // Debug: log raw PDF text to browser console for troubleshooting
       if (data._debug_text) {
-        console.log("=== PDF RAW TEXT ===\n", data._debug_text);
-        console.log("=== FIRST VEHICLE ===\n", data._debug_first_vehicle);
+        console.log("=== PDF RAW TEXT (first 3000 chars) ===\n", data._debug_text);
+        console.log("=== FIRST 5 VEHICLES ===\n", JSON.stringify(data._debug_first_5, null, 2));
       }
       fetchVehicles();
     } catch (err) {

@@ -13,50 +13,59 @@ const supabase = createClient(
  * Custom page renderer that preserves the tabular layout by grouping text
  * items by their Y position (just like pdftotext -layout does).
  * This is critical for vAuto PDFs which are multi-column tables.
+ *
+ * Uses proximity-based clustering instead of fixed-bucket rounding to avoid
+ * splitting items that are on the same table row but at slightly different Y coords.
  */
 function layoutRenderer(pageData: any) {
   return pageData.getTextContent().then(function (textContent: any) {
-    const lineMap = new Map<number, { x: number; str: string; width: number }[]>();
-
+    // Collect all text items
+    const allItems: { y: number; x: number; str: string; width: number }[] = [];
     for (const item of textContent.items) {
       if (!item.str || item.str.trim() === "") continue;
-      // Round Y to nearest 4pt to group items on the same visual line
-      // (PDF table rows can have 3-4pt offset between columns)
-      const y = Math.round(item.transform[5] / 4) * 4;
-      const x = item.transform[4];
-
-      if (!lineMap.has(y)) {
-        lineMap.set(y, []);
-      }
-      lineMap.get(y)!.push({ x, str: item.str, width: item.width || 0 });
+      allItems.push({
+        y: item.transform[5],
+        x: item.transform[4],
+        str: item.str,
+        width: item.width || 0,
+      });
     }
 
-    // Sort lines top-to-bottom (highest Y first in PDF coords)
-    const sortedYs = [...lineMap.keys()].sort((a, b) => b - a);
-    let text = "";
+    // Sort by Y descending (top of page first in PDF coordinates)
+    allItems.sort((a, b) => b.y - a.y);
 
-    for (const y of sortedYs) {
-      const items = lineMap.get(y)!;
-      items.sort((a, b) => a.x - b.x);
+    // Cluster items into lines: items within 5pt of the line's anchor Y
+    // are on the same line. This avoids the hard-boundary problem of rounding.
+    const lines: typeof allItems[] = [];
+    let currentLine: typeof allItems = [];
+    let anchorY: number | null = null;
 
-      // Smart join: use gap between items to decide space vs no-space
-      let lineText = "";
-      for (let i = 0; i < items.length; i++) {
-        if (i > 0) {
-          const prev = items[i - 1];
-          const prevEnd = prev.x + prev.width;
-          const gap = items[i].x - prevEnd;
-          // Only add space if there's a meaningful gap (> 2pt)
-          // This prevents "87 , 159" from split number items
-          lineText += gap > 2 ? " " : "";
+    for (const item of allItems) {
+      if (anchorY !== null && Math.abs(item.y - anchorY) <= 5) {
+        currentLine.push(item);
+      } else {
+        if (currentLine.length > 0) {
+          lines.push([...currentLine]);
         }
-        lineText += items[i].str;
+        currentLine = [item];
+        anchorY = item.y;
       }
+    }
+    if (currentLine.length > 0) {
+      lines.push(currentLine);
+    }
 
-      // Extra cleanup: fix any remaining split numbers like "87 ,159" or "87, 159"
-      lineText = lineText.replace(/(\d)\s*,\s*(\d)/g, "$1,$2");
+    // Build text from clustered lines
+    let text = "";
+    for (const line of lines) {
+      // Sort items left-to-right within each line
+      line.sort((a, b) => a.x - b.x);
 
-      text += lineText + "\n";
+      // Join items with spaces
+      const lineText = line.map((it) => it.str).join(" ");
+
+      // Cleanup: fix split numbers like "87 , 159" → "87,159"
+      text += lineText.replace(/(\d)\s*,\s*(\d)/g, "$1,$2") + "\n";
     }
 
     return text;
@@ -332,8 +341,9 @@ export async function POST(req: Request) {
     });
 
     console.log(`After filtering: ${vehicles.length} vehicles with prices (${allVehicles.length - vehicles.length} skipped)`);
-    if (vehicles.length > 0) {
-      console.log("First vehicle:", JSON.stringify(vehicles[0]));
+    // Log first 5 vehicles for debugging mileage issues
+    for (let i = 0; i < Math.min(5, vehicles.length); i++) {
+      console.log(`  Vehicle ${i}: ${vehicles[i].year} ${vehicles[i].make} ${vehicles[i].model} | price=${vehicles[i].price} | mileage=${vehicles[i].mileage}`);
     }
 
     if (vehicles.length === 0) {
@@ -445,8 +455,13 @@ export async function POST(req: Request) {
       removed,
       skipped,
       total: vehicles.length,
-      _debug_text: fullText.substring(0, 1500),
-      _debug_first_vehicle: vehicles[0] || null,
+      _debug_text: fullText.substring(0, 3000),
+      _debug_first_5: vehicles.slice(0, 5).map((v: any) => ({
+        name: `${v.year} ${v.make} ${v.model}`,
+        price: v.price,
+        mileage: v.mileage,
+        vin: v.vin,
+      })),
     });
   } catch (error: any) {
     console.error("PDF upload error:", error);
