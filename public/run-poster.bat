@@ -1,4 +1,5 @@
 @echo off
+setlocal
 title FB Marketplace Auto-Poster
 color 0E
 
@@ -16,6 +17,7 @@ if %errorlevel% neq 0 (
 :: Check .env.local
 if not exist ".env.local" (
     echo ERROR: .env.local not found!
+    echo Make sure the file is named .env.local (with the dot at the start).
     echo Run install.bat or create .env.local manually.
     pause
     exit /b 1
@@ -33,12 +35,12 @@ if not exist ".fb-session" (
 )
 
 echo.
-echo  ╔══════════════════════════════════════════════════╗
-echo  ║   FB Marketplace Auto-Poster                      ║
-echo  ║   Compliant Mode: 10/day, 10-15 min gaps          ║
-echo  ╠══════════════════════════════════════════════════╣
-echo  ║   Press Ctrl+C to stop at any time                 ║
-echo  ╚══════════════════════════════════════════════════╝
+echo  ====================================================
+echo    FB Marketplace Auto-Poster
+echo    Compliant Mode: 10/day, 10-15 min gaps
+echo  ----------------------------------------------------
+echo    Press Ctrl+C to stop at any time
+echo  ====================================================
 echo.
 
 :: Run the poster
