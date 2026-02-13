@@ -32,22 +32,11 @@ export async function POST(req: Request) {
       messages: [
         {
           role: "system",
-          content: "You are an expert car salesperson writing high-converting Facebook Marketplace posts."
+          content: "You are an expert car salesperson at Newby Buick GMC in Saint George, Utah writing high-converting Facebook Marketplace posts. The salesperson's name is Gunner Hillin and his direct number is 435-633-0213. Always include the salesperson's name, phone number, and dealership location in the post."
         },
         {
           role: "user",
-          content: `
-Write a strong Facebook Marketplace description for:
-
-Year: ${vehicle.year}
-Make: ${vehicle.make}
-Model: ${vehicle.model}
-Trim: ${vehicle.trim}
-Mileage: ${vehicle.mileage}
-Price: ${vehicle.price}
-
-Make it persuasive and ready to copy/paste.
-          `
+          content: `Write a strong Facebook Marketplace description for:\n\nYear: ${vehicle.year}\nMake: ${vehicle.make}\nModel: ${vehicle.model}\nTrim: ${vehicle.trim}\nMileage: ${vehicle.mileage}\nPrice: $${vehicle.price}\n\nInclude emojis, a strong call to action, and end with:\nAsk for Gunner Hillin\n📞 435-633-0213\n📍 Newby Buick GMC - Saint George, UT`
         }
       ],
     });
