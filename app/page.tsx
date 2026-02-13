@@ -98,9 +98,14 @@ export default function Home() {
     fetchPostingStatus();
     const saved = localStorage.getItem("lastVAutoUpload");
     if (saved) setLastUpload(saved);
-    // Refresh posting status every 30 seconds
-    const interval = setInterval(fetchPostingStatus, 30000);
-    return () => clearInterval(interval);
+    // Auto-refresh both vehicles and posting status every 15 seconds
+    // This keeps the website in sync when the poster runs on another computer
+    const vehicleInterval = setInterval(fetchVehicles, 15000);
+    const statusInterval = setInterval(fetchPostingStatus, 15000);
+    return () => {
+      clearInterval(vehicleInterval);
+      clearInterval(statusInterval);
+    };
   }, []);
 
   const daysSinceUpload = lastUpload

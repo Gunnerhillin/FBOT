@@ -430,6 +430,12 @@ async function postVehicleToMarketplace(page, vehicle) {
       '[aria-label*="uel"]',
     ]);
 
+    // Vehicle condition (required — defaults to "Used - Good" for dealership inventory)
+    await fillDropdown(page, "Vehicle condition", "Used - Good", [
+      '[aria-label*="ondition"]',
+      '[aria-label="Condition"]',
+    ]);
+
     await sleep(2000);
 
     // Take a screenshot for debugging

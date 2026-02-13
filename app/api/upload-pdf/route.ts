@@ -16,18 +16,19 @@ const supabase = createClient(
  */
 function layoutRenderer(pageData: any) {
   return pageData.getTextContent().then(function (textContent: any) {
-    const lineMap = new Map<number, { x: number; str: string }[]>();
+    const lineMap = new Map<number, { x: number; str: string; width: number }[]>();
 
     for (const item of textContent.items) {
       if (!item.str || item.str.trim() === "") continue;
-      // Round Y to nearest 2px to group items on the same visual line
-      const y = Math.round(item.transform[5] / 2) * 2;
+      // Round Y to nearest 4pt to group items on the same visual line
+      // (PDF table rows can have 3-4pt offset between columns)
+      const y = Math.round(item.transform[5] / 4) * 4;
       const x = item.transform[4];
 
       if (!lineMap.has(y)) {
         lineMap.set(y, []);
       }
-      lineMap.get(y)!.push({ x, str: item.str });
+      lineMap.get(y)!.push({ x, str: item.str, width: item.width || 0 });
     }
 
     // Sort lines top-to-bottom (highest Y first in PDF coords)
@@ -37,7 +38,24 @@ function layoutRenderer(pageData: any) {
     for (const y of sortedYs) {
       const items = lineMap.get(y)!;
       items.sort((a, b) => a.x - b.x);
-      const lineText = items.map((it) => it.str).join(" ");
+
+      // Smart join: use gap between items to decide space vs no-space
+      let lineText = "";
+      for (let i = 0; i < items.length; i++) {
+        if (i > 0) {
+          const prev = items[i - 1];
+          const prevEnd = prev.x + prev.width;
+          const gap = items[i].x - prevEnd;
+          // Only add space if there's a meaningful gap (> 2pt)
+          // This prevents "87 , 159" from split number items
+          lineText += gap > 2 ? " " : "";
+        }
+        lineText += items[i].str;
+      }
+
+      // Extra cleanup: fix any remaining split numbers like "87 ,159" or "87, 159"
+      lineText = lineText.replace(/(\d)\s*,\s*(\d)/g, "$1,$2");
+
       text += lineText + "\n";
     }
 
@@ -134,10 +152,23 @@ function parseVAutoText(fullText: string) {
         current.price = priceInline[1].replace(/,/g, "");
       }
 
-      // Mileage is typically the last number on the line (after the date)
+      // Mileage: try date+mileage pattern first, then fall back to last number on line
       const mileageInline = line.match(/\d{1,2}\/\d{1,2}\/\d{4}\s+([0-9,]+)/);
       if (mileageInline) {
         current.mileage = mileageInline[1].replace(/,/g, "");
+      } else {
+        // Fallback: grab the last standalone number on the line (not the price or year)
+        // This handles no-date lines like wholesale vehicles
+        const allNumbers = [...line.matchAll(/(?:^|\s)(\d{1,3}(?:,\d{3})+|\d{4,})(?:\s|$)/g)];
+        if (allNumbers.length > 0) {
+          const lastNum = allNumbers[allNumbers.length - 1][1].replace(/,/g, "");
+          const num = parseInt(lastNum, 10);
+          // Only treat as mileage if it's a reasonable range (100 - 999,999)
+          // and not the year or price we already captured
+          if (num >= 100 && num <= 999999 && lastNum !== current.year && lastNum !== current.price) {
+            current.mileage = lastNum;
+          }
+        }
       }
 
       continue;
@@ -179,7 +210,7 @@ function parseVAutoText(fullText: string) {
       }
     }
 
-    // Standalone mileage line
+    // Standalone mileage line (just a number by itself)
     if (!current.mileage && /^[0-9,]+$/.test(line)) {
       const num = parseInt(line.replace(/,/g, ""), 10);
       if (num >= 100 && num <= 999999) {
@@ -193,6 +224,29 @@ function parseVAutoText(fullText: string) {
       const dateMileage = line.match(/\d{1,2}\/\d{1,2}\/\d{4}\s+([0-9,]+)/);
       if (dateMileage) {
         current.mileage = dateMileage[1].replace(/,/g, "");
+        continue;
+      }
+    }
+
+    // Price + date + mileage on a separate line: "$14,495 2/9/2026 87,159"
+    if (!current.mileage && !current.price) {
+      const priceDateMileage = line.match(/\$([0-9,]+)\s+\d{1,2}\/\d{1,2}\/\d{4}\s+([0-9,]+)/);
+      if (priceDateMileage) {
+        current.price = priceDateMileage[1].replace(/,/g, "");
+        current.mileage = priceDateMileage[2].replace(/,/g, "");
+        continue;
+      }
+    }
+
+    // Just price + mileage without date: "$14,495 87,159"
+    if (!current.mileage) {
+      const priceAndNum = line.match(/\$([0-9,]+)\s+(\d{1,3}(?:,\d{3})+|\d{4,})\s*$/);
+      if (priceAndNum && !current.price) {
+        current.price = priceAndNum[1].replace(/,/g, "");
+        const possibleMileage = parseInt(priceAndNum[2].replace(/,/g, ""), 10);
+        if (possibleMileage >= 100 && possibleMileage <= 999999) {
+          current.mileage = String(possibleMileage);
+        }
         continue;
       }
     }
@@ -263,9 +317,21 @@ export async function POST(req: Request) {
     console.log(fullText.substring(0, 2000));
     console.log("--- End extract ---");
 
-    const vehicles = parseVAutoText(fullText);
+    const allVehicles = parseVAutoText(fullText);
 
-    console.log(`Parsed ${vehicles.length} vehicles from PDF`);
+    console.log(`Parsed ${allVehicles.length} total vehicles from PDF`);
+
+    // Filter out vehicles with no price (wholesale, trade-ins, etc.)
+    const vehicles = allVehicles.filter((v) => {
+      const price = parseInt(v.price, 10);
+      if (!v.price || isNaN(price) || price <= 0) {
+        console.log(`  Skipping no-price vehicle: ${v.year} ${v.make} ${v.model} (price: "${v.price}")`);
+        return false;
+      }
+      return true;
+    });
+
+    console.log(`After filtering: ${vehicles.length} vehicles with prices (${allVehicles.length - vehicles.length} skipped)`);
     if (vehicles.length > 0) {
       console.log("First vehicle:", JSON.stringify(vehicles[0]));
     }
