@@ -273,6 +273,30 @@ export default function Home() {
     showToast("Stopping after current vehicle...", "info");
   };
 
+  // Regenerate all descriptions with updated contact info
+  const [regenRunning, setRegenRunning] = useState(false);
+  const regenDescriptions = async () => {
+    setRegenRunning(true);
+    showToast("Regenerating all descriptions...", "info");
+    try {
+      const res = await fetch("/api/regen-descriptions", { method: "POST" });
+      const data = await res.json();
+      if (data.error) {
+        showToast(data.error, "error");
+      } else {
+        showToast(
+          `Regenerated ${data.regenerated} descriptions${data.failed > 0 ? ` (${data.failed} failed)` : ""}`,
+          "success"
+        );
+        fetchVehicles();
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Regeneration failed", "error");
+    }
+    setRegenRunning(false);
+  };
+
   // Delete a single vehicle
   const deleteVehicle = (id: number) => {
     showConfirm("Delete this vehicle and its photos?", async () => {
@@ -527,6 +551,20 @@ export default function Home() {
               </button>
               <button style={styles.btnDanger} onClick={deleteAllInventory}>
                 Delete All Inventory
+              </button>
+            </div>
+
+            <div style={styles.toolCard}>
+              <h3 style={styles.toolTitle}>Descriptions</h3>
+              <p style={{ color: "#888", fontSize: "13px", marginBottom: "12px" }}>
+                Regenerate all descriptions with your contact info (Gunner Hillin, 435-633-0213).
+              </p>
+              <button
+                style={{ ...styles.btnPrimary, background: regenRunning ? "#666" : "#111" }}
+                onClick={regenDescriptions}
+                disabled={regenRunning}
+              >
+                {regenRunning ? "Regenerating..." : "Regenerate All Descriptions"}
               </button>
             </div>
 
