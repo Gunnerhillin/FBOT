@@ -1,7 +1,11 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { withAuth } from "../../../lib/auth";
 
 export async function POST(req: Request) {
+  const { user, errorResponse } = await withAuth(req);
+  if (errorResponse) return errorResponse;
+
   try {
     // Check if API key exists
     if (!process.env.OPENAI_API_KEY) {

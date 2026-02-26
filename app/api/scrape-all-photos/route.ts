@@ -1,14 +1,10 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { withAdmin } from "../../../lib/auth";
+import { getServiceClient } from "../../../lib/supabase";
 import OpenAI from "openai";
 import { getShouldStop, setShouldStop } from "@/lib/scrape-control";
-
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -18,7 +14,7 @@ const DEALER_ID = "18776";
 const BASE_URL = `https://www.newbybuick.com/inventoryphotos/${DEALER_ID}`;
 const MAX_PHOTOS = 50;
 
-async function scrapePhotosForVin(vin: string): Promise<string[]> {
+async function scrapePhotosForVin(svc: any, vin: string): Promise<string[]> {
   const vinLower = vin.toLowerCase();
   const photoUrls: string[] = [];
 
@@ -37,7 +33,7 @@ async function scrapePhotosForVin(vin: string): Promise<string[]> {
 
       const storagePath = `${vinLower}/${i}.jpg`;
 
-      const { error: uploadError } = await supabase.storage
+      const { error: uploadError } = await svc.storage
         .from("vehicle-photos")
         .upload(storagePath, buffer, {
           contentType: "image/jpeg",
@@ -49,7 +45,7 @@ async function scrapePhotosForVin(vin: string): Promise<string[]> {
         continue;
       }
 
-      const { data: publicUrlData } = supabase.storage
+      const { data: publicUrlData } = svc.storage
         .from("vehicle-photos")
         .getPublicUrl(storagePath);
 
@@ -89,11 +85,16 @@ async function generateDescription(vehicle: any): Promise<string | null> {
  * Scrape photos + auto-generate descriptions for ALL vehicles
  * that need them. Checks the stop flag between each vehicle.
  */
-export async function POST() {
+export async function POST(request: Request) {
+  const { user, errorResponse } = await withAdmin(request);
+  if (errorResponse) return errorResponse;
+
   setShouldStop(false);
 
   try {
-    const { data: vehicles, error: fetchError } = await supabase
+    const svc = getServiceClient();
+
+    const { data: vehicles, error: fetchError } = await svc
       .from("vehicles")
       .select("*")
       .not("vin", "is", null)
@@ -134,10 +135,10 @@ export async function POST() {
 
         // Scrape photos if needed
         if (!v.photos || v.photos.length === 0) {
-          const photos = await scrapePhotosForVin(v.vin);
+          const photos = await scrapePhotosForVin(svc, v.vin);
 
           if (photos.length > 0) {
-            await supabase
+            await svc
               .from("vehicles")
               .update({ photos })
               .eq("id", v.id);
@@ -161,7 +162,7 @@ export async function POST() {
           console.log(`${v.vin}: generating description...`);
           const description = await generateDescription(v);
           if (description) {
-            await supabase
+            await svc
               .from("vehicles")
               .update({ description_a: description })
               .eq("id", v.id);

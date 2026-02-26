@@ -1,22 +1,23 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { withAuth } from "../../../lib/auth";
+import { getServiceClient } from "../../../lib/supabase";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
 export async function POST(req: Request) {
+  const { user, errorResponse } = await withAuth(req);
+  if (errorResponse) return errorResponse;
+
   try {
     const { id } = await req.json();
 
+    const svc = getServiceClient();
+
     // 1️⃣ Get vehicle from database
-    const { data: vehicle, error } = await supabase
+    const { data: vehicle, error } = await svc
       .from("vehicles")
       .select("*")
       .eq("id", id)
@@ -44,7 +45,7 @@ export async function POST(req: Request) {
     const description = completion.choices[0].message.content;
 
     // 3️⃣ Save description to DB
-    await supabase
+    await svc
       .from("vehicles")
       .update({ description_a: description })
       .eq("id", id);

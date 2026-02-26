@@ -1,17 +1,23 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
-import { supabase } from "@/lib/supabase";
+import { withAuth } from "../../../lib/auth";
+import { getServiceClient } from "../../../lib/supabase";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
 export async function POST(req: Request) {
+  const { user, errorResponse } = await withAuth(req);
+  if (errorResponse) return errorResponse;
+
   try {
     const { vehicleId } = await req.json();
 
+    const svc = getServiceClient();
+
     // Get vehicle
-    const { data: vehicle, error } = await supabase
+    const { data: vehicle, error } = await svc
       .from("vehicles")
       .select("*")
       .eq("id", vehicleId)
@@ -50,7 +56,7 @@ Ask for Gunner Hillin
     const description = completion.choices[0].message.content || "";
 
     // Save to database
-    const { error: updateError } = await supabase
+    const { error: updateError } = await svc
       .from("vehicles")
       .update({ description_a: description })
       .eq("id", vehicleId);

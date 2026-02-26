@@ -1,13 +1,9 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { withAdmin } from "../../../lib/auth";
+import { getServiceClient } from "../../../lib/supabase";
 import pdfParse from "pdf-parse";
-
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
 
 /**
  * Custom page renderer that preserves the tabular layout by grouping text
@@ -302,7 +298,11 @@ function parseVAutoText(fullText: string) {
 }
 
 export async function POST(req: Request) {
+  const { user, errorResponse } = await withAdmin(req);
+  if (errorResponse) return errorResponse;
+
   try {
+    const svc = getServiceClient();
     const formData = await req.formData();
     const file = formData.get("file");
 
@@ -356,7 +356,7 @@ export async function POST(req: Request) {
     }
 
     // --- Smart Sync Logic ---
-    const { data: existingVehicles, error: fetchError } = await supabase
+    const { data: existingVehicles, error: fetchError } = await svc
       .from("vehicles")
       .select("id, vin, year, make, model");
 
@@ -399,7 +399,7 @@ export async function POST(req: Request) {
 
       if (vinUpper && existingByVin.has(vinUpper)) {
         const existing = existingByVin.get(vinUpper);
-        const { error: updateError } = await supabase
+        const { error: updateError } = await svc
           .from("vehicles")
           .update({ price: v.price, mileage: v.mileage || null })
           .eq("id", existing.id);
@@ -411,7 +411,7 @@ export async function POST(req: Request) {
           updated++;
         }
       } else {
-        const { error: insertError } = await supabase
+        const { error: insertError } = await svc
           .from("vehicles")
           .insert(record);
 
@@ -433,16 +433,16 @@ export async function POST(req: Request) {
 
     for (const sv of soldVehicles) {
       const vinLower = sv.vin.toLowerCase();
-      const { data: files } = await supabase.storage
+      const { data: files } = await svc.storage
         .from("vehicle-photos")
         .list(vinLower);
 
       if (files && files.length > 0) {
         const filePaths = files.map((f: any) => `${vinLower}/${f.name}`);
-        await supabase.storage.from("vehicle-photos").remove(filePaths);
+        await svc.storage.from("vehicle-photos").remove(filePaths);
       }
 
-      await supabase.from("vehicles").delete().eq("id", sv.id);
+      await svc.from("vehicles").delete().eq("id", sv.id);
       removed++;
     }
 

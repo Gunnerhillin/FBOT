@@ -2,13 +2,9 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { withAdmin } from "../../../lib/auth";
+import { getServiceClient } from "../../../lib/supabase";
 import OpenAI from "openai";
-
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -37,10 +33,15 @@ async function generateDescription(vehicle: any): Promise<string | null> {
   }
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  const { user, errorResponse } = await withAdmin(request);
+  if (errorResponse) return errorResponse;
+
   try {
+    const svc = getServiceClient();
+
     // Get ALL vehicles (regenerate every description)
-    const { data: vehicles, error } = await supabase
+    const { data: vehicles, error } = await svc
       .from("vehicles")
       .select("*")
       .order("id", { ascending: true });
@@ -69,7 +70,7 @@ export async function POST() {
 
       const description = await generateDescription(vehicle);
       if (description) {
-        const { error: updateError } = await supabase
+        const { error: updateError } = await svc
           .from("vehicles")
           .update({ description_a: description })
           .eq("id", vehicle.id);

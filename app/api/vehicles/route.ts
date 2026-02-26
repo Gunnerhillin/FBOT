@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { withAuth } from "../../../lib/auth";
+import { getServiceClient } from "../../../lib/supabase";
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+export async function GET(request: Request) {
+  const { user, errorResponse } = await withAuth(request);
+  if (errorResponse) return errorResponse;
 
-export async function GET() {
-  const { data, error } = await supabase
+  const svc = getServiceClient();
+  const { data, error } = await svc
     .from("vehicles")
     .select("*");
 

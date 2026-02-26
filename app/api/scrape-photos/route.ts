@@ -1,13 +1,9 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { withAuth } from "../../../lib/auth";
+import { getServiceClient } from "../../../lib/supabase";
 import OpenAI from "openai";
-
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -48,6 +44,9 @@ async function generateDescription(vehicle: any): Promise<string | null> {
  * then auto-generate an FB Marketplace description if one doesn't exist.
  */
 export async function POST(req: Request) {
+  const { user, errorResponse } = await withAuth(req);
+  if (errorResponse) return errorResponse;
+
   try {
     const { vehicleId, vin } = await req.json();
 
@@ -55,6 +54,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "VIN is required" }, { status: 400 });
     }
 
+    const svc = getServiceClient();
     const vinLower = vin.toLowerCase();
     const photoUrls: string[] = [];
 
@@ -75,7 +75,7 @@ export async function POST(req: Request) {
 
         const storagePath = `${vinLower}/${i}.jpg`;
 
-        const { error: uploadError } = await supabase.storage
+        const { error: uploadError } = await svc.storage
           .from("vehicle-photos")
           .upload(storagePath, buffer, {
             contentType: "image/jpeg",
@@ -87,7 +87,7 @@ export async function POST(req: Request) {
           continue;
         }
 
-        const { data: publicUrlData } = supabase.storage
+        const { data: publicUrlData } = svc.storage
           .from("vehicle-photos")
           .getPublicUrl(storagePath);
 
@@ -113,13 +113,13 @@ export async function POST(req: Request) {
     // Update the vehicle record with photo URLs
     let descriptionGenerated = false;
     if (vehicleId) {
-      await supabase
+      await svc
         .from("vehicles")
         .update({ photos: photoUrls })
         .eq("id", vehicleId);
 
       // Auto-generate description if missing
-      const { data: vehicle } = await supabase
+      const { data: vehicle } = await svc
         .from("vehicles")
         .select("*")
         .eq("id", vehicleId)
@@ -129,7 +129,7 @@ export async function POST(req: Request) {
         console.log(`Generating description for ${vin}...`);
         const description = await generateDescription(vehicle);
         if (description) {
-          await supabase
+          await svc
             .from("vehicles")
             .update({ description_a: description })
             .eq("id", vehicleId);

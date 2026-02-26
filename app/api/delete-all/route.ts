@@ -1,13 +1,13 @@
-import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { withAdmin } from "../../../lib/auth";
+import { getServiceClient } from "../../../lib/supabase";
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+export async function POST(request: Request) {
+  const { user, errorResponse } = await withAdmin(request);
+  if (errorResponse) return errorResponse;
 
-export async function POST() {
-  const { error } = await supabase
+  const svc = getServiceClient();
+  const { error } = await svc
     .from("vehicles")
     .delete()
     .neq("id", 0); // deletes all rows

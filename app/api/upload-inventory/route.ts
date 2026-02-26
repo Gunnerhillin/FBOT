@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { withAdmin } from "../../../lib/auth";
+import { getServiceClient } from "../../../lib/supabase";
 
 function parseInventory(rawText: string) {
   const lines = rawText.split("\n");
@@ -46,6 +47,9 @@ function parseInventory(rawText: string) {
 }
 
 export async function POST(req: Request) {
+  const { user, errorResponse } = await withAdmin(req);
+  if (errorResponse) return errorResponse;
+
   try {
     const { rawText } = await req.json();
 
@@ -65,7 +69,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const { error } = await supabase
+    const svc = getServiceClient();
+    const { error } = await svc
       .from("vehicles")
       .insert(vehicles);
 
