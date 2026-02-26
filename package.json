@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "fb-login": "node scripts/fb-login.mjs",
-    "poster": "node scripts/fb-poster.mjs"
+    "poster": "node scripts/fb-poster.mjs",
+    "renew": "node scripts/fb-renew.mjs",
+    "autoreply": "node scripts/test-autoreply.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
