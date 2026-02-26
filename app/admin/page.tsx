@@ -90,6 +90,28 @@ export default function AdminPage() {
     setInviteLoading(false);
   };
 
+  const approveUser = async (userId: string) => {
+    const res = await authFetch("/api/admin/users", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, is_active: true }),
+    });
+    const data = await res.json();
+    if (data.error) showMessage(data.error, "error");
+    else { showMessage("Account approved", "success"); fetchUsers(); }
+  };
+
+  const denyUser = async (userId: string) => {
+    const res = await authFetch("/api/admin/users", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, is_active: false }),
+    });
+    const data = await res.json();
+    if (data.error) showMessage(data.error, "error");
+    else { showMessage("Account denied", "success"); fetchUsers(); }
+  };
+
   const toggleActive = async (userId: string, currentlyActive: boolean) => {
     const res = await authFetch("/api/admin/users", {
       method: "PATCH",
@@ -97,11 +119,8 @@ export default function AdminPage() {
       body: JSON.stringify({ userId, is_active: !currentlyActive }),
     });
     const data = await res.json();
-    if (data.error) {
-      showMessage(data.error, "error");
-    } else {
-      fetchUsers();
-    }
+    if (data.error) showMessage(data.error, "error");
+    else fetchUsers();
   };
 
   const updateLimit = async (userId: string, newLimit: number) => {
@@ -109,6 +128,17 @@ export default function AdminPage() {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userId, daily_post_limit: newLimit }),
+    });
+    const data = await res.json();
+    if (data.error) showMessage(data.error, "error");
+    else fetchUsers();
+  };
+
+  const updateRole = async (userId: string, newRole: string) => {
+    const res = await authFetch("/api/admin/users", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, role: newRole }),
     });
     const data = await res.json();
     if (data.error) showMessage(data.error, "error");
@@ -125,6 +155,9 @@ export default function AdminPage() {
 
   if (!user || user.role !== "admin") return null;
 
+  // Split users into pending vs active/disabled
+  const pendingUsers = users.filter((u) => !u.is_active && u.role !== "admin");
+  const activeUsers = users.filter((u) => u.is_active || u.role === "admin");
   const totalPostsToday = Object.values(userStats).reduce((sum, s) => sum + (s.posted_today || 0), 0);
   const totalQueued = Object.values(userStats).reduce((sum, s) => sum + (s.queued || 0), 0);
 
@@ -148,32 +181,63 @@ export default function AdminPage() {
         <div style={styles.headerRow}>
           <div>
             <h1 style={styles.title}>Admin Panel</h1>
-            <p style={styles.subtitle}>Manage salespeople and monitor posting activity</p>
+            <p style={styles.subtitle}>Manage salespeople, approve accounts, and monitor activity</p>
           </div>
           <button style={styles.inviteBtn} onClick={() => setShowInvite(!showInvite)}>
             {showInvite ? "Cancel" : "+ Add Salesperson"}
           </button>
         </div>
 
+        {/* ── Pending Approvals ── */}
+        {pendingUsers.length > 0 && (
+          <div style={styles.pendingSection}>
+            <div style={styles.pendingHeader}>
+              <span style={styles.pendingDot} />
+              <h2 style={styles.pendingTitle}>
+                Pending Approvals ({pendingUsers.length})
+              </h2>
+            </div>
+            <div style={styles.pendingGrid}>
+              {pendingUsers.map((u) => (
+                <div key={u.id} style={styles.pendingCard}>
+                  <div style={styles.pendingInfo}>
+                    <div style={{ fontWeight: 600, fontSize: "15px" }}>{u.full_name}</div>
+                    <div style={{ fontSize: "13px", color: "#888" }}>{u.email}</div>
+                    <div style={{ fontSize: "12px", color: "#bbb", marginTop: "4px" }}>
+                      Signed up {new Date(u.created_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <div style={styles.pendingActions}>
+                    <button style={styles.approveBtn} onClick={() => approveUser(u.id)}>
+                      Approve
+                    </button>
+                    <button style={styles.denyBtn} onClick={() => denyUser(u.id)}>
+                      Deny
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Stats overview */}
         <div style={styles.statsRow}>
           <div style={styles.statCard}>
-            <span style={styles.statValue}>{users.filter((u) => u.is_active).length}</span>
+            <span style={styles.statValue}>{activeUsers.filter((u) => u.is_active).length}</span>
             <span style={styles.statLabel}>Active Users</span>
           </div>
           <div style={styles.statCard}>
+            <span style={styles.statValue}>{pendingUsers.length}</span>
+            <span style={styles.statLabel}>Pending</span>
+          </div>
+          <div style={styles.statCard}>
             <span style={styles.statValue}>{totalPostsToday}</span>
-            <span style={styles.statLabel}>Posts Today (all)</span>
+            <span style={styles.statLabel}>Posts Today</span>
           </div>
           <div style={styles.statCard}>
             <span style={styles.statValue}>{totalQueued}</span>
             <span style={styles.statLabel}>Total Queued</span>
-          </div>
-          <div style={styles.statCard}>
-            <span style={styles.statValue}>
-              {users.reduce((sum, u) => sum + u.daily_post_limit, 0)}
-            </span>
-            <span style={styles.statLabel}>Total Daily Capacity</span>
           </div>
         </div>
 
@@ -181,7 +245,7 @@ export default function AdminPage() {
         {showInvite && (
           <div style={styles.inviteCard}>
             <h3 style={{ fontSize: "16px", fontWeight: 600, margin: "0 0 16px 0" }}>
-              Add New Salesperson
+              Add New Salesperson (pre-approved)
             </h3>
             <form onSubmit={inviteUser} style={styles.inviteForm}>
               <input
@@ -234,26 +298,38 @@ export default function AdminPage() {
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => {
+              {activeUsers.map((u) => {
                 const stats = userStats[u.id] || { posted_today: 0, queued: 0, total_posted: 0 };
+                const isMe = u.id === user.id;
                 return (
                   <tr key={u.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
                     <td style={styles.td}>
                       <div>
-                        <div style={{ fontWeight: 600, fontSize: "14px" }}>{u.full_name}</div>
+                        <div style={{ fontWeight: 600, fontSize: "14px" }}>
+                          {u.full_name} {isMe && <span style={{ color: "#999", fontWeight: 400 }}>(you)</span>}
+                        </div>
                         <div style={{ fontSize: "12px", color: "#999" }}>{u.email}</div>
                       </div>
                     </td>
                     <td style={styles.td}>
-                      <span style={{
-                        fontSize: "11px", fontWeight: 600, padding: "2px 8px", borderRadius: "4px",
-                        textTransform: "uppercase" as const, letterSpacing: "0.3px",
-                        ...(u.role === "admin"
-                          ? { color: "#7c3aed", background: "#f5f3ff" }
-                          : { color: "#0369a1", background: "#f0f9ff" }),
-                      }}>
-                        {u.role}
-                      </span>
+                      {isMe ? (
+                        <span style={{
+                          fontSize: "11px", fontWeight: 600, padding: "2px 8px", borderRadius: "4px",
+                          textTransform: "uppercase" as const, letterSpacing: "0.3px",
+                          color: "#7c3aed", background: "#f5f3ff",
+                        }}>
+                          admin
+                        </span>
+                      ) : (
+                        <select
+                          value={u.role}
+                          onChange={(e) => updateRole(u.id, e.target.value)}
+                          style={styles.roleSelect}
+                        >
+                          <option value="salesperson">Salesperson</option>
+                          <option value="admin">Admin</option>
+                        </select>
+                      )}
                     </td>
                     <td style={styles.td}>
                       <select
@@ -285,7 +361,7 @@ export default function AdminPage() {
                       </span>
                     </td>
                     <td style={styles.td}>
-                      {u.id !== user.id && (
+                      {!isMe && (
                         <button
                           style={{
                             ...styles.toggleBtn,
@@ -316,6 +392,18 @@ const styles: Record<string, React.CSSProperties> = {
   subtitle: { fontSize: "14px", color: "#888", margin: 0 },
   inviteBtn: { padding: "10px 20px", borderRadius: "8px", border: "none", background: "#111", color: "#fff", cursor: "pointer", fontSize: "14px", fontWeight: 600 },
 
+  // Pending approvals
+  pendingSection: { marginBottom: "32px", border: "2px solid #f59e0b", borderRadius: "10px", padding: "24px", background: "#fffbeb" },
+  pendingHeader: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" },
+  pendingDot: { width: "10px", height: "10px", borderRadius: "50%", background: "#f59e0b", flexShrink: 0 },
+  pendingTitle: { fontSize: "18px", fontWeight: 700, margin: 0, color: "#92400e" },
+  pendingGrid: { display: "flex", flexDirection: "column" as const, gap: "12px" },
+  pendingCard: { display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", border: "1px solid #fde68a", borderRadius: "8px", padding: "16px 20px" },
+  pendingInfo: {},
+  pendingActions: { display: "flex", gap: "10px" },
+  approveBtn: { padding: "8px 20px", borderRadius: "6px", border: "none", background: "#16a34a", color: "#fff", cursor: "pointer", fontSize: "13px", fontWeight: 600 },
+  denyBtn: { padding: "8px 20px", borderRadius: "6px", border: "1px solid #dc2626", background: "#fff", color: "#dc2626", cursor: "pointer", fontSize: "13px", fontWeight: 600 },
+
   // Stats
   statsRow: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "16px", marginBottom: "32px" },
   statCard: { background: "#fafafa", border: "1px solid #e5e5e5", borderRadius: "8px", padding: "20px", display: "flex", flexDirection: "column" as const, alignItems: "center", gap: "4px" },
@@ -334,6 +422,7 @@ const styles: Record<string, React.CSSProperties> = {
   th: { textAlign: "left" as const, padding: "14px 16px", fontSize: "12px", fontWeight: 600, color: "#888", textTransform: "uppercase" as const, letterSpacing: "0.3px", borderBottom: "1px solid #e5e5e5", background: "#fafafa" },
   td: { padding: "14px 16px", fontSize: "14px", verticalAlign: "middle" as const },
   limitSelect: { padding: "4px 8px", borderRadius: "4px", border: "1px solid #ddd", fontSize: "13px", fontWeight: 500, cursor: "pointer" },
+  roleSelect: { padding: "4px 8px", borderRadius: "4px", border: "1px solid #ddd", fontSize: "13px", fontWeight: 500, cursor: "pointer" },
   toggleBtn: { padding: "6px 14px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: 600, border: "none" },
   toggleBtnDisable: { background: "#fef2f2", color: "#dc2626" },
   toggleBtnEnable: { background: "#f0fdf4", color: "#16a34a" },

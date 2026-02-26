@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
     email,
     password,
     email_confirm: true, // Auto-confirm email
-    user_metadata: { full_name, role: "salesperson" },
+    user_metadata: { full_name, role: "salesperson", pre_approved: true },
   });
 
   if (authError) {

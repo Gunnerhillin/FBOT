@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FB Marketplace Tool — Newby Buick GMC",
+  title: "FB Poster by Gunner",
   description: "Auto-post vehicles to Facebook Marketplace",
 };
 

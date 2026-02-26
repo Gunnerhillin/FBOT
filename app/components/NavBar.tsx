@@ -22,7 +22,7 @@ export default function NavBar() {
       <div style={styles.inner}>
         <div style={styles.left}>
           <a href="/inventory" style={styles.logo}>
-            FB Marketplace Tool
+            FB Poster by Gunner
           </a>
           <div style={styles.links}>
             {links.map((link) => (

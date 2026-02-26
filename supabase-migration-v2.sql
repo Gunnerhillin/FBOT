@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   full_name TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'salesperson' CHECK (role IN ('admin', 'salesperson')),
   daily_post_limit INTEGER NOT NULL DEFAULT 10,
-  is_active BOOLEAN NOT NULL DEFAULT true,
+  is_active BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -34,12 +34,14 @@ CREATE TABLE posting_daily_count (
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.profiles (id, email, full_name, role)
+  INSERT INTO public.profiles (id, email, full_name, role, is_active)
   VALUES (
     NEW.id,
     NEW.email,
     COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email),
-    COALESCE(NEW.raw_user_meta_data->>'role', 'salesperson')
+    COALESCE(NEW.raw_user_meta_data->>'role', 'salesperson'),
+    -- Admin-created accounts (via invite) are pre-approved; self-signups are not
+    COALESCE((NEW.raw_user_meta_data->>'pre_approved')::boolean, false)
   );
   RETURN NEW;
 END;
