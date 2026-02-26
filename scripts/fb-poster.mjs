@@ -1,19 +1,16 @@
 /**
- * Facebook Marketplace Auto-Poster
+ * Facebook Marketplace Auto-Poster (Multi-User)
  *
  * Posts queued vehicles to Facebook Marketplace using Playwright.
- * Fully compliant with FB dealer rules:
- *   - Max 10 posts per day
- *   - 10-15 minute random delay between posts
- *   - Uses your personal account (persistent session)
- *   - No duplicate content
- *   - Updates vehicle status in Supabase
+ * Supports multiple salespeople, each with their own FB session and daily limit.
  *
- * Usage: npm run poster
+ * Usage:
+ *   npm run poster                       # Process all active users
+ *   npm run poster -- --user-id UUID     # Process a specific user only
  *
  * Prerequisites:
- *   1. Run `npm run fb-login` first to set up your Facebook session
- *   2. Run the SQL migration in Supabase
+ *   1. Run `npm run fb-login -- --user-id UUID` for each user's Facebook session
+ *   2. Run the SQL migrations in Supabase
  *   3. Queue vehicles for posting from the UI
  */
 
@@ -21,17 +18,28 @@ import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, mkdirSync } from "fs";
 import { setTimeout as sleep } from "timers/promises";
 
 // ── Config ──
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SESSION_DIR = join(__dirname, "..", ".fb-session");
+const BASE_SESSION_DIR = join(__dirname, "..", ".fb-sessions");
+const LEGACY_SESSION_DIR = join(__dirname, "..", ".fb-session");
 const ENV_PATH = join(__dirname, "..", ".env.local");
 
-const MAX_POSTS_PER_DAY = 10;
+const DEFAULT_MAX_POSTS_PER_DAY = 10;
 const MIN_DELAY_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_DELAY_MS = 15 * 60 * 1000; // 15 minutes
+
+// ── Parse CLI args ──
+const args = process.argv.slice(2);
+let targetUserId = null;
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--user-id" && args[i + 1]) {
+    targetUserId = args[i + 1];
+    i++;
+  }
+}
 
 // ── Load env ──
 function loadEnv() {
@@ -70,56 +78,100 @@ function log(msg) {
   console.log(`[${ts}] ${msg}`);
 }
 
-async function getDailyCount() {
+function getSessionDir(userId) {
+  // Multi-user: each user gets their own session directory
+  if (userId) {
+    const dir = join(BASE_SESSION_DIR, userId);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+  // Fallback to legacy single-user session
+  return LEGACY_SESSION_DIR;
+}
+
+async function getDailyCount(userId) {
   const today = new Date().toISOString().split("T")[0];
-  const { data } = await supabase
+  const query = supabase
     .from("posting_daily_count")
     .select("count")
-    .eq("date", today)
-    .single();
+    .eq("date", today);
+
+  if (userId) query.eq("user_id", userId);
+
+  const { data } = await query.single();
   return data?.count || 0;
 }
 
-async function incrementDailyCount() {
+async function incrementDailyCount(userId) {
   const today = new Date().toISOString().split("T")[0];
+  const filter = { date: today, user_id: userId };
+
   const { data: existing } = await supabase
     .from("posting_daily_count")
     .select("count")
     .eq("date", today)
+    .eq("user_id", userId)
     .single();
 
   if (existing) {
     await supabase
       .from("posting_daily_count")
       .update({ count: existing.count + 1, last_post_at: new Date().toISOString() })
-      .eq("date", today);
+      .eq("date", today)
+      .eq("user_id", userId);
   } else {
     await supabase
       .from("posting_daily_count")
-      .insert({ date: today, count: 1, last_post_at: new Date().toISOString() });
+      .insert({ date: today, user_id: userId, count: 1, last_post_at: new Date().toISOString() });
   }
 }
 
-async function logActivity(vehicleId, action, details = null) {
+async function logActivity(vehicleId, action, userId, details = null) {
   await supabase.from("posting_log").insert({
     vehicle_id: vehicleId,
     action,
+    user_id: userId,
     details,
   });
 }
 
-async function getQueuedVehicles() {
-  const { data, error } = await supabase
+async function getQueuedVehicles(userId) {
+  const query = supabase
     .from("vehicles")
     .select("*")
     .eq("fb_status", "queued")
     .order("fb_queued_at", { ascending: true });
 
+  if (userId) query.eq("queued_by", userId);
+
+  const { data, error } = await query;
   if (error) {
     log(`ERROR fetching queue: ${error.message}`);
     return [];
   }
   return data || [];
+}
+
+async function getActiveUsers() {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, email, full_name, daily_post_limit, is_active")
+    .eq("is_active", true);
+
+  if (error) {
+    log(`ERROR fetching users: ${error.message}`);
+    return [];
+  }
+  return data || [];
+}
+
+async function getUserProfile(userId) {
+  const { data } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", userId)
+    .single();
+  return data;
 }
 
 async function updateVehicleStatus(id, status, listingUrl = null) {
@@ -133,10 +185,6 @@ async function updateVehicleStatus(id, status, listingUrl = null) {
 
 // ── Helpers for robust form interaction ──
 
-/**
- * Try multiple selectors to find a form field. Facebook changes their DOM often,
- * so we try aria-label, placeholder, label text, and role-based selectors.
- */
 async function findField(page, fieldName, extraSelectors = []) {
   const selectors = [
     `[aria-label="${fieldName}"]`,
@@ -158,7 +206,6 @@ async function findField(page, fieldName, extraSelectors = []) {
     } catch {}
   }
 
-  // Fallback: try getByLabel and getByPlaceholder
   try {
     const byLabel = page.getByLabel(fieldName, { exact: false }).first();
     if (await byLabel.count() > 0 && await byLabel.isVisible()) {
@@ -179,19 +226,12 @@ async function findField(page, fieldName, extraSelectors = []) {
   return null;
 }
 
-/**
- * Type text character-by-character with random delays (more human-like,
- * better at triggering Facebook's dropdown suggestions).
- */
 async function humanType(page, text) {
   for (const char of text) {
     await page.keyboard.type(char, { delay: 30 + Math.random() * 50 });
   }
 }
 
-/**
- * Fill a dropdown/combobox field: click, clear, type, wait for dropdown, select.
- */
 async function fillDropdown(page, fieldName, value, extraSelectors = []) {
   log(`  Filling ${fieldName}...`);
   const field = await findField(page, fieldName, extraSelectors);
@@ -200,29 +240,22 @@ async function fillDropdown(page, fieldName, value, extraSelectors = []) {
   try {
     await field.click();
     await sleep(300);
-
-    // Clear existing text
     await page.keyboard.press("Control+a");
     await page.keyboard.press("Backspace");
     await sleep(200);
-
-    // Type human-like to trigger dropdown
     await humanType(page, value);
-    await sleep(1200); // Wait for dropdown suggestions
+    await sleep(1200);
 
-    // Try clicking the dropdown option that matches
     const option = page.locator(`[role="option"]:has-text("${value}")`).first();
     if (await option.count() > 0) {
       await option.click();
       log(`    Selected dropdown option for "${value}"`);
     } else {
-      // Fallback: try listbox items
       const listItem = page.locator(`[role="listbox"] >> text="${value}"`).first();
       if (await listItem.count() > 0) {
         await listItem.click();
         log(`    Selected listbox item for "${value}"`);
       } else {
-        // Last resort: press ArrowDown + Enter to select first suggestion
         await page.keyboard.press("ArrowDown");
         await sleep(200);
         await page.keyboard.press("Enter");
@@ -237,9 +270,6 @@ async function fillDropdown(page, fieldName, value, extraSelectors = []) {
   }
 }
 
-/**
- * Fill a simple text input field (no dropdown).
- */
 async function fillTextField(page, fieldName, value, extraSelectors = []) {
   log(`  Filling ${fieldName}...`);
   const field = await findField(page, fieldName, extraSelectors);
@@ -248,7 +278,6 @@ async function fillTextField(page, fieldName, value, extraSelectors = []) {
   try {
     await field.click();
     await sleep(200);
-    // Use fill() for plain text fields — much faster than typing char by char
     await field.fill(String(value));
     await sleep(300);
     return true;
@@ -264,31 +293,13 @@ async function postVehicleToMarketplace(page, vehicle) {
   log(`Posting: ${title} (VIN: ${vehicle.vin})`);
 
   try {
-    // Navigate to create vehicle listing
     await page.goto("https://www.facebook.com/marketplace/create/vehicle", {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
     await sleep(3000 + Math.random() * 1000);
 
-    // Debug: log all visible aria-labels so we know what's on the page
-    try {
-      const labels = await page.evaluate(() => {
-        const els = document.querySelectorAll("[aria-label]");
-        return [...els]
-          .filter((el) => el.offsetParent !== null)
-          .map((el) => ({
-            tag: el.tagName,
-            label: el.getAttribute("aria-label"),
-            role: el.getAttribute("role"),
-            placeholder: el.getAttribute("placeholder"),
-          }))
-          .slice(0, 40);
-      });
-      log(`  Page aria-labels found: ${JSON.stringify(labels, null, 0).slice(0, 500)}`);
-    } catch {}
-
-    // ── Upload Photos (batch) ──
+    // Upload Photos
     if (vehicle.photos && vehicle.photos.length > 0) {
       const photoCount = Math.min(vehicle.photos.length, 20);
       log(`  Downloading ${photoCount} photos...`);
@@ -296,7 +307,6 @@ async function postVehicleToMarketplace(page, vehicle) {
       const { writeFileSync, unlinkSync } = await import("fs");
       const tempPaths = [];
 
-      // Download all photos first (parallel for speed)
       const downloads = vehicle.photos.slice(0, 20).map(async (url, i) => {
         try {
           const response = await fetch(url);
@@ -318,9 +328,8 @@ async function postVehicleToMarketplace(page, vehicle) {
         log(`  Uploading ${tempPaths.length} photos in batch...`);
         const fileInput = page.locator('input[type="file"][accept*="image"]').first();
         await fileInput.setInputFiles(tempPaths);
-        await sleep(3000 + tempPaths.length * 300); // Scale wait with photo count
+        await sleep(3000 + tempPaths.length * 300);
 
-        // Clean up temp files
         for (const p of tempPaths) {
           try { unlinkSync(p); } catch {}
         }
@@ -328,31 +337,17 @@ async function postVehicleToMarketplace(page, vehicle) {
       log(`  Photos uploaded`);
     }
 
-    // ── Fill Vehicle Details ──
-
-    // Vehicle type (first field on the form — Car/Truck, SUV, etc.)
-    // Map common body types from vAuto to FB Marketplace categories
+    // Fill Vehicle Details
     const bodyToType = {
-      "4D Sport Utility": "SUV/Crossover",
-      "Sport Utility": "SUV/Crossover",
-      "SUV": "SUV/Crossover",
-      "4D Crew Cab": "Truck",
-      "Crew Cab": "Truck",
-      "Regular Cab": "Truck",
-      "Extended Cab": "Truck",
-      "4D Sedan": "Sedan",
-      "Sedan": "Sedan",
-      "4D Hatchback": "Hatchback",
-      "Hatchback": "Hatchback",
-      "2D Coupe": "Coupe",
-      "Coupe": "Coupe",
-      "4D Passenger Van": "Van/Minivan",
-      "Van": "Van/Minivan",
-      "Minivan": "Van/Minivan",
-      "Convertible": "Convertible",
-      "Wagon": "Wagon",
+      "4D Sport Utility": "SUV/Crossover", "Sport Utility": "SUV/Crossover", "SUV": "SUV/Crossover",
+      "4D Crew Cab": "Truck", "Crew Cab": "Truck", "Regular Cab": "Truck", "Extended Cab": "Truck",
+      "4D Sedan": "Sedan", "Sedan": "Sedan",
+      "4D Hatchback": "Hatchback", "Hatchback": "Hatchback",
+      "2D Coupe": "Coupe", "Coupe": "Coupe",
+      "4D Passenger Van": "Van/Minivan", "Van": "Van/Minivan", "Minivan": "Van/Minivan",
+      "Convertible": "Convertible", "Wagon": "Wagon",
     };
-    let vehicleType = "Car/Truck"; // default
+    let vehicleType = "Car/Truck";
     if (vehicle.body) {
       for (const [key, val] of Object.entries(bodyToType)) {
         if (vehicle.body.toLowerCase().includes(key.toLowerCase())) {
@@ -361,36 +356,14 @@ async function postVehicleToMarketplace(page, vehicle) {
         }
       }
     }
-    log(`  Setting vehicle type: ${vehicleType} (from body: ${vehicle.body || "none"})`);
-    await fillDropdown(page, "Vehicle type", vehicleType, [
-      '[aria-label="Vehicle type"]',
-      '[aria-label="Type"]',
-      '[aria-label="Category"]',
-    ]);
-
-    // Year (dropdown)
+    await fillDropdown(page, "Vehicle type", vehicleType, ['[aria-label="Vehicle type"]', '[aria-label="Type"]', '[aria-label="Category"]']);
     await fillDropdown(page, "Year", String(vehicle.year));
-
-    // Make (dropdown)
     await fillDropdown(page, "Make", vehicle.make);
-
-    // Model (dropdown)
     await fillDropdown(page, "Model", vehicle.model);
-
-    // Trim (dropdown, optional)
-    if (vehicle.trim) {
-      await fillDropdown(page, "Trim", vehicle.trim);
-    }
-
-    // Price (text field)
+    if (vehicle.trim) await fillDropdown(page, "Trim", vehicle.trim);
     await fillTextField(page, "Price", vehicle.price || 0);
+    if (vehicle.mileage) await fillTextField(page, "Mileage", vehicle.mileage);
 
-    // Mileage (text field)
-    if (vehicle.mileage) {
-      await fillTextField(page, "Mileage", vehicle.mileage);
-    }
-
-    // Description (textarea)
     if (vehicle.description_a) {
       log("  Filling description...");
       const descField = await findField(page, "Description", [
@@ -400,60 +373,30 @@ async function postVehicleToMarketplace(page, vehicle) {
       if (descField) {
         await descField.click();
         await sleep(300);
-        // Use fill() for long text — faster and more reliable
         await descField.fill(vehicle.description_a);
         await sleep(500);
       }
     }
 
-    // Location
-    log("  Setting location...");
-    await fillDropdown(page, "Location", "St. George, UT", [
-      '[aria-label*="ocation"]',
-    ]);
-
-    // VIN (text field)
-    if (vehicle.vin) {
-      await fillTextField(page, "VIN", vehicle.vin, [
-        'input[aria-label*="VIN"]',
-        'input[aria-label*="vin"]',
-      ]);
-    }
-
-    // Transmission (try to set if visible)
-    await fillDropdown(page, "Transmission", "Automatic", [
-      '[aria-label*="ransmission"]',
-    ]);
-
-    // Fuel type (try if visible)
-    await fillDropdown(page, "Fuel type", "Gasoline", [
-      '[aria-label*="uel"]',
-    ]);
-
-    // Vehicle condition (required — defaults to "Used - Good" for dealership inventory)
-    await fillDropdown(page, "Vehicle condition", "Used - Good", [
-      '[aria-label*="ondition"]',
-      '[aria-label="Condition"]',
-    ]);
+    await fillDropdown(page, "Location", "St. George, UT", ['[aria-label*="ocation"]']);
+    if (vehicle.vin) await fillTextField(page, "VIN", vehicle.vin, ['input[aria-label*="VIN"]', 'input[aria-label*="vin"]']);
+    await fillDropdown(page, "Transmission", "Automatic", ['[aria-label*="ransmission"]']);
+    await fillDropdown(page, "Fuel type", "Gasoline", ['[aria-label*="uel"]']);
+    await fillDropdown(page, "Vehicle condition", "Used - Good", ['[aria-label*="ondition"]', '[aria-label="Condition"]']);
 
     await sleep(2000);
 
-    // Take a screenshot for debugging
     const screenshotPath = join(__dirname, `last_post_${vehicle.vin || "unknown"}.png`);
     await page.screenshot({ path: screenshotPath, fullPage: true });
-    log(`  Screenshot saved: ${screenshotPath}`);
 
-    // ── Click "Next" or "Publish" ──
+    // Click Next / Publish
     log("  Looking for Next/Publish button...");
-
-    // Try "Next" button (multi-step form)
     const nextBtn = page.locator('[aria-label="Next"]').first();
     if (await nextBtn.count() > 0 && await nextBtn.isVisible()) {
       await nextBtn.click();
       log("  Clicked Next");
       await sleep(3000);
     } else {
-      // Try text-based fallback
       const nextText = page.getByRole("button", { name: "Next" }).first();
       if (await nextText.count() > 0) {
         await nextText.click();
@@ -462,14 +405,12 @@ async function postVehicleToMarketplace(page, vehicle) {
       }
     }
 
-    // Look for Publish button
     const publishBtn = page.locator('[aria-label="Publish"]').first();
     if (await publishBtn.count() > 0 && await publishBtn.isVisible()) {
       await publishBtn.click();
       log("  Clicked Publish!");
       await sleep(5000);
     } else {
-      // Text-based fallback
       const publishText = page.getByRole("button", { name: "Publish" }).first();
       if (await publishText.count() > 0) {
         await publishText.click();
@@ -477,17 +418,12 @@ async function postVehicleToMarketplace(page, vehicle) {
         await sleep(5000);
       } else {
         log("  WARNING: Could not find Publish button. Check screenshot.");
-        await page.screenshot({
-          path: join(__dirname, `no_publish_${vehicle.vin || "unknown"}.png`),
-          fullPage: true,
-        });
         return { success: false, error: "Publish button not found" };
       }
     }
 
     const currentUrl = page.url();
     const listingUrl = currentUrl.includes("marketplace") ? currentUrl : null;
-
     log(`  SUCCESS: ${title} posted!`);
     return { success: true, listingUrl };
   } catch (err) {
@@ -502,55 +438,49 @@ async function postVehicleToMarketplace(page, vehicle) {
   }
 }
 
-// ── Main Loop ──
-async function main() {
-  // Check session exists
-  if (!existsSync(SESSION_DIR)) {
-    console.error("ERROR: No Facebook session found.");
-    console.error("Run `npm run fb-login` first to set up your session.");
-    process.exit(1);
-  }
+// ── Process a single user's queue ──
+async function processUser(userProfile) {
+  const userId = userProfile.id;
+  const userName = userProfile.full_name;
+  const maxPosts = userProfile.daily_post_limit || DEFAULT_MAX_POSTS_PER_DAY;
+  const sessionDir = getSessionDir(userId);
 
   console.log("");
-  console.log("╔══════════════════════════════════════════════════╗");
-  console.log("║    FB Marketplace Auto-Poster                    ║");
-  console.log("║    Compliant Mode (10/day, 10-15min gaps)        ║");
-  console.log("╠══════════════════════════════════════════════════╣");
-  console.log("║    Press Ctrl+C to stop at any time              ║");
-  console.log("╚══════════════════════════════════════════════════╝");
-  console.log("");
+  log(`══════ Processing: ${userName} ══════`);
+
+  // Check session exists
+  if (!existsSync(sessionDir)) {
+    log(`  No Facebook session found for ${userName}.`);
+    log(`  Run: npm run fb-login -- --user-id ${userId}`);
+    return { posted: 0, failed: 0, skipped: true };
+  }
 
   // Check daily count
-  const todayCount = await getDailyCount();
-  log(`Daily posts so far: ${todayCount}/${MAX_POSTS_PER_DAY}`);
+  const todayCount = await getDailyCount(userId);
+  log(`  Daily posts: ${todayCount}/${maxPosts}`);
 
-  if (todayCount >= MAX_POSTS_PER_DAY) {
-    log("Daily limit reached! Try again tomorrow.");
-    process.exit(0);
+  if (todayCount >= maxPosts) {
+    log(`  Daily limit reached for ${userName}. Skipping.`);
+    return { posted: 0, failed: 0, skipped: true };
   }
 
-  // Get queued vehicles
-  const queue = await getQueuedVehicles();
-  log(`Vehicles in queue: ${queue.length}`);
+  // Get queued vehicles for this user
+  const queue = await getQueuedVehicles(userId);
+  log(`  Vehicles in queue: ${queue.length}`);
 
   if (queue.length === 0) {
-    log("No vehicles queued. Add vehicles from the UI first.");
-    process.exit(0);
+    log(`  No vehicles queued for ${userName}.`);
+    return { posted: 0, failed: 0, skipped: false };
   }
 
-  const remaining = MAX_POSTS_PER_DAY - todayCount;
+  const remaining = maxPosts - todayCount;
   const toPost = queue.slice(0, remaining);
-  log(`Will post ${toPost.length} vehicles (${remaining} slots remaining today)`);
+  log(`  Will post ${toPost.length} vehicles (${remaining} slots remaining)`);
 
-  // Estimate total time
-  const estMinutes = toPost.length * 12.5; // avg 12.5 min between posts
-  log(`Estimated time: ~${Math.round(estMinutes)} minutes`);
-  console.log("");
-
-  // Launch browser
-  log("Launching browser...");
-  const context = await chromium.launchPersistentContext(SESSION_DIR, {
-    headless: false, // headed so you can monitor + handle any captchas
+  // Launch browser with user's session
+  log(`  Launching browser for ${userName}...`);
+  const context = await chromium.launchPersistentContext(sessionDir, {
+    headless: false,
     viewport: { width: 1280, height: 900 },
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -560,8 +490,8 @@ async function main() {
 
   const page = context.pages()[0] || (await context.newPage());
 
-  // Verify we're logged into Facebook
-  log("Checking Facebook login...");
+  // Verify Facebook login
+  log(`  Checking Facebook login for ${userName}...`);
   await page.goto("https://www.facebook.com/marketplace", {
     waitUntil: "domcontentloaded",
     timeout: 30000,
@@ -570,55 +500,125 @@ async function main() {
 
   const loginCheck = page.url();
   if (loginCheck.includes("login") || loginCheck.includes("checkpoint")) {
-    log("ERROR: Not logged into Facebook. Run `npm run fb-login` first.");
+    log(`  ERROR: ${userName} not logged into Facebook.`);
+    log(`  Run: npm run fb-login -- --user-id ${userId}`);
     await context.close();
-    process.exit(1);
+    return { posted: 0, failed: 0, skipped: true };
   }
 
-  log("Facebook login confirmed!");
-  console.log("");
+  log(`  Facebook login confirmed for ${userName}!`);
 
-  // Post vehicles one by one
   let posted = 0;
+  let failed = 0;
+
   for (let i = 0; i < toPost.length; i++) {
     const vehicle = toPost[i];
     const title = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
 
-    log(`═══ Vehicle ${i + 1}/${toPost.length}: ${title} ═══`);
+    log(`  ─── Vehicle ${i + 1}/${toPost.length}: ${title} ───`);
 
-    // Update status to "posting"
     await updateVehicleStatus(vehicle.id, "posting");
-
     const result = await postVehicleToMarketplace(page, vehicle);
 
     if (result.success) {
       await updateVehicleStatus(vehicle.id, "posted", result.listingUrl);
-      await incrementDailyCount();
-      await logActivity(vehicle.id, "posted", result.listingUrl);
+      await incrementDailyCount(userId);
+      await logActivity(vehicle.id, "posted", userId, result.listingUrl);
       posted++;
     } else {
       await updateVehicleStatus(vehicle.id, "failed");
-      await logActivity(vehicle.id, "failed", result.error);
+      await logActivity(vehicle.id, "failed", userId, result.error);
+      failed++;
     }
 
-    // Delay before next post (skip if last)
+    // Delay before next post
     if (i < toPost.length - 1) {
       const delayMs = randomDelay();
       const delayMin = Math.round(delayMs / 60000);
-      log(`Waiting ${delayMin} minutes before next post...`);
-      log(`(Next: ${toPost[i + 1].year} ${toPost[i + 1].make} ${toPost[i + 1].model})`);
-      console.log("");
+      log(`  Waiting ${delayMin} minutes before next post...`);
       await sleep(delayMs);
     }
   }
 
+  await context.close();
+  log(`  ${userName}: ${posted} posted, ${failed} failed`);
+  return { posted, failed, skipped: false };
+}
+
+// ── Main Loop ──
+async function main() {
+  console.log("");
+  console.log("╔══════════════════════════════════════════════════╗");
+  console.log("║    FB Marketplace Auto-Poster (Multi-User)       ║");
+  console.log("║    Compliant Mode (per-user limits, 10-15min)    ║");
+  console.log("╠══════════════════════════════════════════════════╣");
+  console.log("║    Press Ctrl+C to stop at any time              ║");
+  console.log("╚══════════════════════════════════════════════════╝");
+  console.log("");
+
+  let usersToProcess = [];
+
+  if (targetUserId) {
+    // Single user mode
+    const profile = await getUserProfile(targetUserId);
+    if (!profile) {
+      log(`ERROR: User ${targetUserId} not found.`);
+      process.exit(1);
+    }
+    usersToProcess = [profile];
+    log(`Single-user mode: ${profile.full_name}`);
+  } else {
+    // Multi-user mode: process all active users who have queued vehicles
+    const activeUsers = await getActiveUsers();
+    log(`Found ${activeUsers.length} active users`);
+
+    for (const u of activeUsers) {
+      const queue = await getQueuedVehicles(u.id);
+      if (queue.length > 0) {
+        usersToProcess.push(u);
+        log(`  ${u.full_name}: ${queue.length} vehicles queued`);
+      } else {
+        log(`  ${u.full_name}: no vehicles queued, skipping`);
+      }
+    }
+  }
+
+  if (usersToProcess.length === 0) {
+    log("No users with queued vehicles found.");
+    process.exit(0);
+  }
+
+  console.log("");
+
+  // Process each user sequentially (each gets their own browser session)
+  const results = {};
+  for (const userProfile of usersToProcess) {
+    try {
+      results[userProfile.full_name] = await processUser(userProfile);
+    } catch (err) {
+      log(`ERROR processing ${userProfile.full_name}: ${err.message}`);
+      results[userProfile.full_name] = { posted: 0, failed: 0, skipped: true };
+    }
+  }
+
+  // Summary
   console.log("");
   log("════════════════════════════════════════");
-  log(`Session complete: ${posted}/${toPost.length} posted successfully`);
-  log(`Daily total: ${todayCount + posted}/${MAX_POSTS_PER_DAY}`);
+  log("SESSION SUMMARY");
   log("════════════════════════════════════════");
-
-  await context.close();
+  let totalPosted = 0;
+  let totalFailed = 0;
+  for (const [name, result] of Object.entries(results)) {
+    if (result.skipped) {
+      log(`  ${name}: skipped`);
+    } else {
+      log(`  ${name}: ${result.posted} posted, ${result.failed} failed`);
+      totalPosted += result.posted;
+      totalFailed += result.failed;
+    }
+  }
+  log(`  TOTAL: ${totalPosted} posted, ${totalFailed} failed`);
+  log("════════════════════════════════════════");
 }
 
 // Handle graceful shutdown
