@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "../../lib/auth-context";
 import { authFetch } from "../../lib/api-client";
+import { supabase } from "../../lib/supabase";
 import NavBar from "../components/NavBar";
 
 // ── Toast System ──
@@ -107,6 +108,7 @@ export default function InventoryPage() {
       window.location.href = "/";
       return;
     }
+    if (!user.is_active) return; // Don't fetch data for inactive users
     fetchVehicles();
     fetchPostingStatus();
     const saved = localStorage.getItem("lastVAutoUpload");
@@ -367,6 +369,27 @@ export default function InventoryPage() {
   }
 
   if (!user) return null;
+
+  // Show pending approval screen for inactive users
+  if (!user.is_active) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", justifyContent: "center", minHeight: "100vh", fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', background: "#fff", padding: "40px" }}>
+        <div style={{ width: "64px", height: "64px", borderRadius: "50%", background: "#fffbeb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "28px", marginBottom: "24px", border: "2px solid #f59e0b" }}>
+          ⏳
+        </div>
+        <h2 style={{ fontSize: "22px", fontWeight: 700, margin: "0 0 8px 0", color: "#111" }}>Account Pending Approval</h2>
+        <p style={{ fontSize: "15px", color: "#888", margin: "0 0 32px 0", textAlign: "center" as const, maxWidth: "400px" }}>
+          Your account has been created. An admin will review and activate it shortly. Check back soon!
+        </p>
+        <button
+          onClick={async () => { await supabase.auth.signOut(); window.location.href = "/"; }}
+          style={{ padding: "10px 24px", borderRadius: "8px", border: "1px solid #ddd", background: "#fff", cursor: "pointer", fontSize: "14px", fontWeight: 500, color: "#666" }}
+        >
+          Back to Login
+        </button>
+      </div>
+    );
+  }
 
   // Helper: is this vehicle queued by the current user?
   const isMyQueue = (v: any) => v.queued_by === user.id;

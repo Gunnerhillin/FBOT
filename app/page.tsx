@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 
 export default function LoginPage() {
@@ -11,6 +11,26 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  // If already logged in, redirect to inventory
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        window.location.href = "/inventory";
+      } else {
+        setCheckingSession(false);
+      }
+    });
+  }, []);
+
+  if (checkingSession) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+        <p style={{ color: "#999" }}>Loading...</p>
+      </div>
+    );
+  }
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,20 +49,7 @@ export default function LoginPage() {
       return;
     }
 
-    // Check if account is approved (is_active)
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("is_active")
-      .eq("id", data.user.id)
-      .single();
-
-    if (profile && !profile.is_active) {
-      setError("Your account is pending approval. An admin will activate it soon.");
-      await supabase.auth.signOut();
-      setLoading(false);
-      return;
-    }
-
+    // Always go to inventory — inactive users will see the pending approval screen there
     window.location.href = "/inventory";
   };
 

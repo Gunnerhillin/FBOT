@@ -36,13 +36,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setToken(session.access_token);
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("profiles")
       .select("*")
       .eq("id", session.user.id)
       .single();
 
-    setUser(data as UserProfile | null);
+    if (error || !data) {
+      console.error("Profile fetch failed:", error?.message || "No profile found");
+      // Profile doesn't exist yet — build one from the session metadata
+      const meta = session.user.user_metadata || {};
+      setUser({
+        id: session.user.id,
+        email: session.user.email || "",
+        full_name: meta.full_name || session.user.email || "",
+        role: meta.role || "salesperson",
+        daily_post_limit: 10,
+        is_active: false,
+        created_at: session.user.created_at || new Date().toISOString(),
+      } as UserProfile);
+    } else {
+      setUser(data as UserProfile);
+    }
     setLoading(false);
   };
 
