@@ -36,27 +36,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setToken(session.access_token);
 
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", session.user.id)
-      .single();
-
-    if (error || !data) {
-      console.error("Profile fetch failed:", error?.message || "No profile found");
-      // Profile doesn't exist yet — build one from the session metadata
-      const meta = session.user.user_metadata || {};
-      setUser({
-        id: session.user.id,
-        email: session.user.email || "",
-        full_name: meta.full_name || session.user.email || "",
-        role: meta.role || "salesperson",
-        daily_post_limit: 10,
-        is_active: false,
-        created_at: session.user.created_at || new Date().toISOString(),
-      } as UserProfile);
-    } else {
-      setUser(data as UserProfile);
+    // Fetch profile via API (uses service client, bypasses RLS)
+    try {
+      const res = await fetch("/api/auth/me", {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        const profile = await res.json();
+        setUser(profile as UserProfile);
+      } else {
+        console.error("Profile API failed:", res.status);
+        setUser(null);
+      }
+    } catch (err) {
+      console.error("Profile fetch error:", err);
+      setUser(null);
     }
     setLoading(false);
   };
