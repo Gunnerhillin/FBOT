@@ -6,8 +6,8 @@ FROM mcr.microsoft.com/playwright:v1.50.0-noble
 
 WORKDIR /app
 
-# Cache bust: v2
-RUN echo "bust cache v2"
+# Cache bust: v3
+RUN echo "bust cache v3"
 
 # Copy only what the poster needs
 COPY package-poster.json ./package.json
