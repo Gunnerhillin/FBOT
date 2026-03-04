@@ -31,6 +31,53 @@ const MAX_DELAY_MS = 6 * 60 * 1000; // 6 minutes between renewals
 const POSTING_START_HOUR = 7;
 const POSTING_END_HOUR = 14;
 
+// ── Railway / headless detection ──
+const IS_RAILWAY = !!(process.env.RAILWAY_HEADLESS || process.env.RAILWAY_ENVIRONMENT);
+
+function getBrowserOptions(sessionDir, opts = {}) {
+  const baseArgs = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+  ];
+  if (IS_RAILWAY) {
+    return {
+      headless: true,
+      viewport: { width: 1280, height: 900 },
+      args: baseArgs,
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      locale: "en-US",
+      timezoneId: "America/Denver",
+      ...opts,
+    };
+  }
+  return {
+    headless: false,
+    viewport: opts.viewport || null,
+    args: opts.maximized ? ["--start-maximized", ...baseArgs] : baseArgs,
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    locale: "en-US",
+    timezoneId: "America/Denver",
+    ...opts,
+  };
+}
+
+async function applyStealthPatches(page) {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+    window.chrome = { runtime: {} };
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters) =>
+      parameters.name === "notifications"
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
+  });
+}
+
 // ── Parse CLI args ──
 const args = process.argv.slice(2);
 let targetUserId = null;
@@ -335,18 +382,11 @@ async function processUserRenewals(userProfile) {
     }
 
     // Launch browser for each listing (avoids session issues)
-    log("  Launching browser...");
-    const context = await chromium.launchPersistentContext(sessionDir, {
-      headless: false,
-      viewport: null,
-      args: ["--start-maximized"],
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-      locale: "en-US",
-      timezoneId: "America/Denver",
-    });
+    log(`  Launching browser${IS_RAILWAY ? " (headless)" : ""}...`);
+    const context = await chromium.launchPersistentContext(sessionDir, getBrowserOptions(sessionDir, { maximized: true }));
 
     const page = context.pages()[0] || (await context.newPage());
+    if (IS_RAILWAY) await applyStealthPatches(page);
 
     const result = await renewListing(page, vehicle);
 

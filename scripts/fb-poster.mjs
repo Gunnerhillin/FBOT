@@ -45,6 +45,73 @@ const POSTING_END_HOUR = 14;   // 2 PM Mountain Time
 const MAX_RETRIES = 2;         // Max retry attempts for failed posts
 const STALE_DAYS = 3;          // Re-list after this many days
 
+// ── Railway / headless detection ──
+const IS_RAILWAY = !!(process.env.RAILWAY_HEADLESS || process.env.RAILWAY_ENVIRONMENT);
+
+/**
+ * Get browser launch options. On Railway, runs headless with stealth args.
+ * Locally, runs with a visible browser window.
+ */
+function getBrowserOptions(sessionDir, opts = {}) {
+  const baseArgs = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+  ];
+
+  if (IS_RAILWAY) {
+    return {
+      headless: true,
+      viewport: { width: 1280, height: 900 },
+      args: baseArgs,
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      locale: "en-US",
+      timezoneId: "America/Denver",
+      ...opts,
+    };
+  }
+
+  return {
+    headless: false,
+    viewport: opts.viewport || null,
+    args: opts.maximized ? ["--start-maximized", ...baseArgs] : baseArgs,
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    locale: "en-US",
+    timezoneId: "America/Denver",
+    ...opts,
+  };
+}
+
+/**
+ * Apply stealth patches to a page to avoid bot detection.
+ */
+async function applyStealthPatches(page) {
+  await page.addInitScript(() => {
+    // Remove webdriver flag
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    // Override plugins to look like a real browser
+    Object.defineProperty(navigator, "plugins", {
+      get: () => [1, 2, 3, 4, 5],
+    });
+    // Override languages
+    Object.defineProperty(navigator, "languages", {
+      get: () => ["en-US", "en"],
+    });
+    // Fix chrome object
+    window.chrome = { runtime: {} };
+    // Fix permissions
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters) =>
+      parameters.name === "notifications"
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
+  });
+}
+
 // ── Parse CLI args ──
 const args = process.argv.slice(2);
 let targetUserId = null;
@@ -492,17 +559,10 @@ async function relistStaleListings(userId) {
 
   let context;
   try {
-    context = await chromium.launchPersistentContext(sessionDir, {
-      headless: false,
-      viewport: null,
-      args: ["--start-maximized"],
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-      locale: "en-US",
-      timezoneId: "America/Denver",
-    });
+    context = await chromium.launchPersistentContext(sessionDir, getBrowserOptions(sessionDir, { maximized: true }));
 
     const page = context.pages()[0] || (await context.newPage());
+    if (IS_RAILWAY) await applyStealthPatches(page);
 
     await page.goto("https://www.facebook.com/marketplace/you/selling", {
       waitUntil: "domcontentloaded",
@@ -624,17 +684,10 @@ async function cleanupSoldListings(userId) {
 
   let context;
   try {
-    context = await chromium.launchPersistentContext(sessionDir, {
-      headless: false,
-      viewport: null,
-      args: ["--start-maximized"],
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-      locale: "en-US",
-      timezoneId: "America/Denver",
-    });
+    context = await chromium.launchPersistentContext(sessionDir, getBrowserOptions(sessionDir, { maximized: true }));
 
     const page = context.pages()[0] || (await context.newPage());
+    if (IS_RAILWAY) await applyStealthPatches(page);
 
     // Go to selling page
     await page.goto("https://www.facebook.com/marketplace/you/selling", {
@@ -1111,17 +1164,11 @@ async function processUser(userProfile) {
   log(`  Will post ${toPost.length} vehicles (${remaining} slots remaining)`);
 
   // Launch browser with user's session
-  log(`  Launching browser for ${userName}...`);
-  const context = await chromium.launchPersistentContext(sessionDir, {
-    headless: false,
-    viewport: { width: 1280, height: 900 },
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    locale: "en-US",
-    timezoneId: "America/Denver",
-  });
+  log(`  Launching browser for ${userName}${IS_RAILWAY ? " (headless)" : ""}...`);
+  const context = await chromium.launchPersistentContext(sessionDir, getBrowserOptions(sessionDir, { viewport: { width: 1280, height: 900 } }));
 
   const page = context.pages()[0] || (await context.newPage());
+  if (IS_RAILWAY) await applyStealthPatches(page);
 
   // Verify Facebook login
   log(`  Checking Facebook login for ${userName}...`);

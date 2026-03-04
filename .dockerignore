@@ -1,0 +1,16 @@
+node_modules
+.next
+.git
+.fb-session
+.fb-sessions
+*.png
+*.log
+app/
+lib/
+public/
+.env.local
+tsconfig.json
+next.config.ts
+postcss.config.mjs
+tailwind.config.ts
+next-env.d.ts
