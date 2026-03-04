@@ -39,8 +39,9 @@ const LEGACY_SESSION_DIR = join(__dirname, "..", ".fb-session");
 const ENV_PATH = join(__dirname, "..", ".env.local");
 
 const DEFAULT_MAX_POSTS_PER_DAY = parseInt(process.env.MAX_POSTS_PER_DAY) || 27;
-const MIN_DELAY_MS = 10 * 60 * 1000; // 10 minutes
-const MAX_DELAY_MS = 15 * 60 * 1000; // 15 minutes
+// Use shorter delays for testing via env var, otherwise normal 10-15 min
+const MIN_DELAY_MS = process.env.TEST_MODE === "true" ? 1 * 60 * 1000 : 10 * 60 * 1000;
+const MAX_DELAY_MS = process.env.TEST_MODE === "true" ? 2 * 60 * 1000 : 15 * 60 * 1000;
 const POSTING_START_HOUR = 7;  // 7 AM Mountain Time
 const POSTING_END_HOUR = 14;   // 2 PM Mountain Time
 const MAX_RETRIES = 2;         // Max retry attempts for failed posts
@@ -1046,23 +1047,92 @@ async function postVehicleToMarketplace(page, vehicle) {
       }
 
       if (tempPaths.length > 0) {
-        log(`  Uploading ${tempPaths.length} photos in batch...`);
-        // Wait for file input to appear (may take longer on Railway headless)
-        const fileInput = page.locator('input[type="file"][accept*="image"]').first();
+        log(`  Uploading ${tempPaths.length} photos...`);
+
+        // Take debug screenshot to see page state
         try {
-          await fileInput.waitFor({ state: "attached", timeout: 15000 });
-        } catch {
-          log("  WARNING: File input slow to appear, waiting extra...");
-          await sleep(5000);
+          await page.screenshot({ path: join(__dirname, "debug_before_upload.png"), fullPage: true });
+          log("  Debug screenshot saved: debug_before_upload.png");
+        } catch {}
+
+        // Try clicking "Add photos" / photo area first to reveal file input
+        const photoTriggers = [
+          'text=/Add photos/i',
+          'text=/Add Photos/i',
+          '[aria-label*="photo" i]',
+          '[aria-label*="Add photo" i]',
+          'text=/Upload photos/i',
+          '[role="button"]:has-text("photo")',
+        ];
+        for (const sel of photoTriggers) {
+          try {
+            const btn = page.locator(sel).first();
+            if (await btn.count() > 0 && await btn.isVisible()) {
+              await btn.click();
+              log(`  Clicked photo trigger: ${sel}`);
+              await sleep(2000);
+              break;
+            }
+          } catch {}
         }
-        await fileInput.setInputFiles(tempPaths, { timeout: 60000 });
-        await sleep(5000 + tempPaths.length * 500);
+
+        // Try multiple file input selectors
+        const fileInputSelectors = [
+          'input[type="file"][accept*="image"]',
+          'input[type="file"][accept*="video"]',
+          'input[type="file"]',
+        ];
+
+        let fileInput = null;
+        for (const sel of fileInputSelectors) {
+          try {
+            const input = page.locator(sel).first();
+            // File inputs are often hidden, so check "attached" not "visible"
+            if (await input.count() > 0) {
+              fileInput = input;
+              log(`  Found file input via: ${sel}`);
+              break;
+            }
+          } catch {}
+        }
+
+        if (!fileInput) {
+          // Last resort: find ANY file input on the page
+          const allInputs = page.locator('input[type="file"]');
+          const count = await allInputs.count();
+          log(`  Total file inputs on page: ${count}`);
+          if (count > 0) {
+            fileInput = allInputs.first();
+          }
+        }
+
+        if (fileInput) {
+          try {
+            await fileInput.setInputFiles(tempPaths, { timeout: 60000 });
+            log(`  Photos uploaded successfully`);
+            await sleep(5000 + tempPaths.length * 500);
+          } catch (uploadErr) {
+            log(`  WARNING: Photo upload failed: ${uploadErr.message}`);
+            // Try uploading fewer photos
+            try {
+              const fewerPhotos = tempPaths.slice(0, 5);
+              log(`  Retrying with ${fewerPhotos.length} photos...`);
+              await fileInput.setInputFiles(fewerPhotos, { timeout: 60000 });
+              log(`  Partial photo upload succeeded`);
+              await sleep(5000);
+            } catch {
+              log(`  ERROR: Photo upload completely failed, continuing without photos`);
+            }
+          }
+        } else {
+          log(`  ERROR: No file input found on page. Continuing without photos.`);
+          await page.screenshot({ path: join(__dirname, "debug_no_file_input.png"), fullPage: true });
+        }
 
         for (const p of tempPaths) {
           try { unlinkSync(p); } catch {}
         }
       }
-      log(`  Photos uploaded`);
     }
 
     // Fill Vehicle Details
