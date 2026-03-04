@@ -65,7 +65,7 @@ function getBrowserOptions(sessionDir, opts = {}) {
 
   if (IS_RAILWAY) {
     return {
-      headless: "new",  // New headless mode — much harder for sites to detect
+      headless: true,  // Playwright 1.50+ uses new headless mode by default
       viewport: { width: 1280, height: 900 },
       args: baseArgs,
       userAgent:
@@ -1319,8 +1319,8 @@ async function postVehicleToMarketplace(page, vehicle) {
       }
     }
 
-    const currentUrl = page.url();
-    const listingUrl = currentUrl.includes("marketplace") ? currentUrl : null;
+    const finalUrl = page.url();
+    const listingUrl = finalUrl.includes("marketplace") ? finalUrl : null;
     log(`  SUCCESS: ${title} posted!`);
     return { success: true, listingUrl };
   } catch (err) {
