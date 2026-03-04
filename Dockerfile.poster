@@ -33,4 +33,4 @@ RUN mkdir -p /app/.fb-sessions /app/.fb-session
 ENV RAILWAY_HEADLESS=true
 EXPOSE 3000
 
-CMD ["node", "scripts/railway-start.mjs"]
+CMD ["node", "scripts/fb-poster.mjs"]
