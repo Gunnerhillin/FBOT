@@ -67,7 +67,8 @@ if exist "fb-marketplace-tool" (
     cd /d "fb-marketplace-tool"
     git pull origin main
 ) else if exist "package.json" (
-    echo [3/5] Already in project folder
+    echo [3/5] Already in project folder, pulling latest...
+    git pull origin main
 ) else (
     echo [3/5] Cloning repository...
     git clone https://github.com/Gunnerhillin/FBOT.git fb-marketplace-tool
@@ -101,18 +102,14 @@ echo.
 :: Check for .env.local
 if not exist ".env.local" (
     echo.
-    echo ====================================================
-    echo  IMPORTANT: You need to create a .env.local file!
-    echo ====================================================
-    echo.
-    echo  Create a file called .env.local in this folder with:
-    echo.
-    echo    SUPABASE_URL=https://ayhwhmcooofzdjvkiacn.supabase.co
-    echo    SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-    echo    NEXT_PUBLIC_SUPABASE_URL=https://ayhwhmcooofzdjvkiacn.supabase.co
-    echo    NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-    echo    OPENAI_API_KEY=your-openai-key
-    echo.
+    echo  Creating .env.local with default settings...
+    (
+        echo SUPABASE_URL=https://ayhwhmcooofzdjvkiacn.supabase.co
+        echo SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF5aHdobWNvb29memRqdmtpYWNuIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDc4MDQ1MywiZXhwIjoyMDg2MzU2NDUzfQ.sVWBI4WQNQD3rOb_adc0sW3IC6k1RWQ3JTvsJIbvvr4
+        echo NEXT_PUBLIC_SUPABASE_URL=https://ayhwhmcooofzdjvkiacn.supabase.co
+        echo NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_IA7GbtjxyElc8_FpoRj10w_TxFWUIl4
+    ) > .env.local
+    echo  .env.local created!
 ) else (
     echo .env.local found
 )
@@ -122,14 +119,11 @@ echo  ====================================================
 echo    Installation Complete!
 echo  ====================================================
 echo.
-echo    To start the website locally:
-echo      Double-click: launch-fb-tool.bat
+echo    NEXT STEP: Set up your Facebook login.
+echo    Double-click: fb-login.bat
 echo.
-echo    To run the auto-poster:
-echo      Double-click: run-poster.bat
-echo.
-echo    First time posting? Run this first:
-echo      npm run fb-login
+echo    Then to run everything daily:
+echo    Double-click: run-all.bat
 echo.
 echo  ====================================================
 echo.

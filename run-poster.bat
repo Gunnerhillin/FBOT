@@ -1,9 +1,7 @@
 @echo off
 setlocal
 title FB Marketplace Auto-Poster
-color 0E
-
-:: Find project directory (same folder as this bat file)
+color 0A
 cd /d "%~dp0"
 
 :: Check Node.js
@@ -16,34 +14,21 @@ if %errorlevel% neq 0 (
 
 :: Check .env.local
 if not exist ".env.local" (
-    echo ERROR: .env.local not found!
-    echo Make sure the file is named .env.local (with the dot at the start).
-    echo Run install.bat or create .env.local manually.
+    echo ERROR: .env.local not found! Run install.bat first.
     pause
     exit /b 1
-)
-
-:: Check Facebook session
-if not exist ".fb-session" (
-    echo.
-    echo  No Facebook session found!
-    echo  Running first-time Facebook login setup...
-    echo  (Log into Facebook in the browser that opens, then close it)
-    echo.
-    call npm run fb-login
-    echo.
 )
 
 echo.
 echo  ====================================================
 echo    FB Marketplace Auto-Poster
-echo    Compliant Mode: 10/day, 10-15 min gaps
+echo    27 posts/day per user, 10-15 min gaps
+echo    Posting hours: 7 AM - 2 PM Mountain Time
 echo  ----------------------------------------------------
 echo    Press Ctrl+C to stop at any time
 echo  ====================================================
 echo.
 
-:: Run the poster
 call npm run poster
 
 echo.

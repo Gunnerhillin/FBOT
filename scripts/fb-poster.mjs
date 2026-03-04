@@ -38,10 +38,9 @@ const BASE_SESSION_DIR = join(__dirname, "..", ".fb-sessions");
 const LEGACY_SESSION_DIR = join(__dirname, "..", ".fb-session");
 const ENV_PATH = join(__dirname, "..", ".env.local");
 
-const DEFAULT_MAX_POSTS_PER_DAY = parseInt(process.env.MAX_POSTS_PER_DAY) || 27;
-// Use shorter delays for testing via env var, otherwise normal 10-15 min
-const MIN_DELAY_MS = process.env.TEST_MODE === "true" ? 1 * 60 * 1000 : 10 * 60 * 1000;
-const MAX_DELAY_MS = process.env.TEST_MODE === "true" ? 2 * 60 * 1000 : 15 * 60 * 1000;
+const DEFAULT_MAX_POSTS_PER_DAY = 27;
+const MIN_DELAY_MS = 10 * 60 * 1000; // 10 minutes
+const MAX_DELAY_MS = 15 * 60 * 1000; // 15 minutes
 const POSTING_START_HOUR = 7;  // 7 AM Mountain Time
 const POSTING_END_HOUR = 14;   // 2 PM Mountain Time
 const MAX_RETRIES = 2;         // Max retry attempts for failed posts
@@ -64,8 +63,8 @@ function getBrowserOptions(sessionDir, opts = {}) {
   ];
 
   if (IS_RAILWAY) {
-    return {
-      headless: true,  // Playwright 1.50+ uses new headless mode by default
+    const options = {
+      headless: true,
       viewport: { width: 1280, height: 900 },
       args: baseArgs,
       userAgent:
@@ -74,6 +73,15 @@ function getBrowserOptions(sessionDir, opts = {}) {
       timezoneId: "America/Denver",
       ...opts,
     };
+
+    // Residential proxy support — set PROXY_URL in Railway env vars
+    // Format: http://user:pass@host:port or socks5://user:pass@host:port
+    if (process.env.PROXY_URL) {
+      options.proxy = { server: process.env.PROXY_URL };
+      log(`  Using proxy: ${process.env.PROXY_URL.replace(/\/\/.*@/, "//***@")}`);
+    }
+
+    return options;
   }
 
   return {
@@ -205,10 +213,6 @@ function getSessionDir(userId) {
  * Check if current time is within posting hours (Mountain Time).
  */
 function isWithinPostingHours() {
-  // TODO: TEMP — bypass posting hours for testing. Remove after test!
-  if (process.env.BYPASS_POSTING_HOURS === "true") {
-    return true;
-  }
   const now = new Date();
   const mt = new Date(now.toLocaleString("en-US", { timeZone: "America/Denver" }));
   const hour = mt.getHours();
@@ -1339,10 +1343,7 @@ async function postVehicleToMarketplace(page, vehicle) {
 async function processUser(userProfile) {
   const userId = userProfile.id;
   const userName = userProfile.full_name;
-  // Env var MAX_POSTS_PER_DAY overrides profile setting (useful for testing)
-  const maxPosts = process.env.MAX_POSTS_PER_DAY
-    ? parseInt(process.env.MAX_POSTS_PER_DAY)
-    : (userProfile.daily_post_limit || DEFAULT_MAX_POSTS_PER_DAY);
+  const maxPosts = userProfile.daily_post_limit || DEFAULT_MAX_POSTS_PER_DAY;
   const sessionDir = getSessionDir(userId);
 
   console.log("");
