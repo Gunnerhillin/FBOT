@@ -61,13 +61,11 @@ function getBrowserOptions(sessionDir, opts = {}) {
     "--no-sandbox",
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
-    "--disable-gpu",
-    "--single-process",
   ];
 
   if (IS_RAILWAY) {
     return {
-      headless: true,
+      headless: "new",  // New headless mode — much harder for sites to detect
       viewport: { width: 1280, height: 900 },
       args: baseArgs,
       userAgent:
@@ -1012,26 +1010,88 @@ async function postVehicleToMarketplace(page, vehicle) {
   log(`Posting: ${title} (VIN: ${vehicle.vin})`);
 
   try {
+    // Two-step navigation: go to marketplace first, then create page
+    // This looks more natural and avoids FB redirecting us away
+    log(`  Navigating to Marketplace homepage first...`);
+    await page.goto("https://www.facebook.com/marketplace/", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    await sleep(3000 + Math.random() * 2000);
+    await dismissPopups(page);
+
+    // Now navigate to create vehicle
+    log(`  Navigating to create vehicle form...`);
     await page.goto("https://www.facebook.com/marketplace/create/vehicle", {
       waitUntil: "networkidle",
       timeout: 60000,
     });
     await sleep(5000 + Math.random() * 2000);
-
-    // Dismiss any popups that loaded
     await dismissPopups(page);
-    await sleep(1000);
 
-    // Scroll down and back up to trigger lazy-loaded elements
+    // Check if we actually landed on the create page
+    let currentUrl = page.url();
+    const pageTitle = await page.title();
+    log(`  Page loaded: "${pageTitle}" — ${currentUrl}`);
+
+    // If redirected away from create page, try clicking "Create new listing" button
+    if (!currentUrl.includes("/create")) {
+      log(`  WARNING: Redirected away from create page. Trying button click...`);
+
+      const createSelectors = [
+        'text=/Create new listing/i',
+        'text=/Create Listing/i',
+        'text=/Sell Something/i',
+        'text=/Create/i',
+        '[aria-label*="Create" i]',
+        '[aria-label*="Sell" i]',
+        'a[href*="/marketplace/create"]',
+      ];
+
+      for (const sel of createSelectors) {
+        try {
+          const btn = page.locator(sel).first();
+          if (await btn.count() > 0 && await btn.isVisible()) {
+            await btn.click();
+            log(`  Clicked: ${sel}`);
+            await sleep(3000);
+            break;
+          }
+        } catch {}
+      }
+
+      // Try vehicle category if we're on the create page now
+      currentUrl = page.url();
+      if (currentUrl.includes("/create") && !currentUrl.includes("/vehicle")) {
+        const vehicleSelectors = [
+          'text=/Vehicle/i',
+          'text=/Car/i',
+          '[aria-label*="Vehicle" i]',
+          'a[href*="/create/vehicle"]',
+        ];
+        for (const sel of vehicleSelectors) {
+          try {
+            const btn = page.locator(sel).first();
+            if (await btn.count() > 0 && await btn.isVisible()) {
+              await btn.click();
+              log(`  Selected vehicle category: ${sel}`);
+              await sleep(3000);
+              break;
+            }
+          } catch {}
+        }
+      }
+
+      currentUrl = page.url();
+      log(`  Final URL: ${currentUrl}`);
+    }
+
+    // Scroll to trigger lazy elements
     await page.evaluate(() => window.scrollBy(0, 300));
     await sleep(1000);
     await page.evaluate(() => window.scrollTo(0, 0));
     await sleep(1000);
 
-    // Log what's on the page for debugging
-    const pageTitle = await page.title();
-    const pageUrl = page.url();
-    log(`  Page loaded: "${pageTitle}" — ${pageUrl}`);
     const fileInputCount = await page.locator('input[type="file"]').count();
     log(`  File inputs found on page: ${fileInputCount}`);
 
