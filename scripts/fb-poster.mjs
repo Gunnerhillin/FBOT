@@ -38,7 +38,7 @@ const BASE_SESSION_DIR = join(__dirname, "..", ".fb-sessions");
 const LEGACY_SESSION_DIR = join(__dirname, "..", ".fb-session");
 const ENV_PATH = join(__dirname, "..", ".env.local");
 
-const DEFAULT_MAX_POSTS_PER_DAY = 27;
+const DEFAULT_MAX_POSTS_PER_DAY = parseInt(process.env.MAX_POSTS_PER_DAY) || 27;
 const MIN_DELAY_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_DELAY_MS = 15 * 60 * 1000; // 15 minutes
 const POSTING_START_HOUR = 7;  // 7 AM Mountain Time
@@ -210,6 +210,10 @@ function getSessionDir(userId) {
  * Check if current time is within posting hours (Mountain Time).
  */
 function isWithinPostingHours() {
+  // TODO: TEMP — bypass posting hours for testing. Remove after test!
+  if (process.env.BYPASS_POSTING_HOURS === "true") {
+    return true;
+  }
   const now = new Date();
   const mt = new Date(now.toLocaleString("en-US", { timeZone: "America/Denver" }));
   const hour = mt.getHours();
