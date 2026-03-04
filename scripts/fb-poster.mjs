@@ -162,7 +162,8 @@ function loadEnv() {
 console.log("[STARTUP] FB Poster starting...");
 console.log(`[STARTUP] IS_RAILWAY=${IS_RAILWAY}`);
 
-if (IS_RAILWAY) {
+// Only start health check if running standalone (not via orchestrator)
+if (IS_RAILWAY && !process.env.RAILWAY_ORCHESTRATOR) {
   const PORT = process.env.PORT || 3000;
   createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });

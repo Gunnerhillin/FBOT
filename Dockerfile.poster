@@ -1,4 +1,4 @@
-# ── FB Marketplace Poster Service (Headless) ──
+# ── FB Marketplace Suite (Poster + Auto-Reply + Renewer) ──
 # Uses slim Node image + only Chromium (not the full Playwright image)
 
 FROM node:20-slim
@@ -33,4 +33,5 @@ RUN mkdir -p /app/.fb-sessions /app/.fb-session
 ENV RAILWAY_HEADLESS=true
 EXPOSE 3000
 
-CMD ["node", "scripts/fb-poster.mjs"]
+# Use orchestrator that runs all three services
+CMD ["node", "scripts/railway-start.mjs"]
