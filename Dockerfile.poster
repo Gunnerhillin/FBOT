@@ -5,8 +5,8 @@ FROM mcr.microsoft.com/playwright:v1.50.0-noble
 
 WORKDIR /app
 
-# Cache bust: v4
-RUN echo "bust cache v4"
+# Cache bust: v5
+RUN echo "bust cache v5"
 
 # Copy only what the poster needs
 COPY package-poster.json ./package.json
@@ -24,5 +24,5 @@ ENV RAILWAY_HEADLESS=true
 # Expose the health check port
 EXPOSE 3000
 
-# Default: run the poster
-CMD ["node", "scripts/fb-poster.mjs"]
+# Default: run via Railway starter (starts health check first, then poster)
+CMD ["node", "scripts/railway-start.mjs"]
