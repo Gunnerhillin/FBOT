@@ -126,13 +126,16 @@ function getSessionDir(userId) {
   return LEGACY_SESSION_DIR;
 }
 
-const REPLY_TEMPLATES = [
-  `Hey what's up! Yeah that one's still available. If you want to come check it out I'm at Newby Buick GMC on Convention Center Dr in St George. You can text me at 435-633-0213 too, usually faster than messenger. My name's Gunner`,
-  `Hey! Yep still got it. Shoot me a text at 435-633-0213 if you wanna come see it, I can have it pulled up front for you. I'm at Newby Buick GMC, 1629 S Convention Center Dr. -Gunner`,
-  `What's going on! That one's here on the lot if you wanna come take a look. I'm here Mon-Sat, just text me at 435-633-0213 and I'll make sure it's ready for you. Newby Buick GMC in St George`,
-  `Hey thanks for hitting me up! That one's available, come check it out whenever works for you. Easiest way to reach me is text 435-633-0213. I'm Gunner at Newby Buick GMC on Convention Center Dr`,
-  `Hey! Yeah come take a look at it, it's a solid one. I'm over at Newby Buick GMC in St George, 1629 S Convention Center Dr. Text me at 435-633-0213 and we can set something up. -Gunner`,
-];
+// Generate per-user reply templates using their contact info
+function getReplyTemplates(name, phone) {
+  return [
+    `Hey what's up! Yeah that one's still available. If you want to come check it out I'm at Newby Buick GMC on Convention Center Dr in St George. You can text me at ${phone} too, usually faster than messenger. My name's ${name}`,
+    `Hey! Yep still got it. Shoot me a text at ${phone} if you wanna come see it, I can have it pulled up front for you. I'm at Newby Buick GMC, 1629 S Convention Center Dr. -${name}`,
+    `What's going on! That one's here on the lot if you wanna come take a look. I'm here Mon-Sat, just text me at ${phone} and I'll make sure it's ready for you. Newby Buick GMC in St George`,
+    `Hey thanks for hitting me up! That one's available, come check it out whenever works for you. Easiest way to reach me is text ${phone}. I'm ${name} at Newby Buick GMC on Convention Center Dr`,
+    `Hey! Yeah come take a look at it, it's a solid one. I'm over at Newby Buick GMC in St George, 1629 S Convention Center Dr. Text me at ${phone} and we can set something up. -${name}`,
+  ];
+}
 
 async function ensureOnInbox(page) {
   const url = page.url();
@@ -156,9 +159,27 @@ async function processAutoReply(userId) {
     return 0;
   }
 
+  // Fetch user's contact info for personalized replies
+  let userName = "Gunner";
+  let userPhone = "435-633-0213";
+  if (userId) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("full_name, display_name, phone")
+      .eq("id", userId)
+      .single();
+    if (profile) {
+      userName = profile.display_name || profile.full_name?.split(" ")[0] || "Gunner";
+      userPhone = profile.phone || "435-633-0213";
+    }
+  }
+  const REPLY_TEMPLATES = getReplyTemplates(userName, userPhone);
+  // Use last 4 digits of phone for "already replied" detection
+  const phoneSnippet = userPhone.replace(/\D/g, "").slice(-4);
+
   let context;
   try {
-    log("Launching browser...");
+    log(`Launching browser for ${userName} (phone: ${userPhone})...`);
     context = await chromium.launchPersistentContext(sessionDir, getBrowserOptions(sessionDir, { maximized: true }));
 
     const page = context.pages()[0] || (await context.newPage());
@@ -232,16 +253,16 @@ async function processAutoReply(userId) {
           continue;
         }
 
-        // Check if already replied
-        const alreadyReplied = await page.evaluate(() => {
+        // Check if already replied (use user's phone snippet + dealership name)
+        const alreadyReplied = await page.evaluate((snippet) => {
           const text = document.body.innerText;
-          if (text.includes("633-0213") || text.includes("Newby Buick GMC")) return true;
+          if (text.includes(snippet) || text.includes("Newby Buick GMC")) return true;
           const sentIndicators = document.querySelectorAll(
             '[data-testid*="outgoing"], [aria-label*="You sent"], [aria-label*="you sent"]'
           );
           if (sentIndicators.length > 0) return true;
           return false;
-        });
+        }, phoneSnippet);
 
         if (alreadyReplied) {
           log(`  Already replied in this thread, skipping`);
@@ -372,7 +393,7 @@ async function main() {
     // Process all active users
     const { data: activeUsers } = await supabase
       .from("profiles")
-      .select("id, full_name, is_active")
+      .select("id, full_name, display_name, phone, is_active")
       .eq("is_active", true);
 
     if (!activeUsers || activeUsers.length === 0) {

@@ -13,6 +13,8 @@ interface SalespersonProfile {
   daily_post_limit: number;
   is_active: boolean;
   created_at: string;
+  phone: string | null;
+  display_name: string | null;
 }
 
 interface UserStats {
@@ -143,6 +145,17 @@ export default function AdminPage() {
     const data = await res.json();
     if (data.error) showMessage(data.error, "error");
     else fetchUsers();
+  };
+
+  const updateField = async (userId: string, field: string, value: string) => {
+    const res = await authFetch("/api/admin/users", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, [field]: value }),
+    });
+    const data = await res.json();
+    if (data.error) showMessage(data.error, "error");
+    else { showMessage("Saved", "success"); fetchUsers(); }
   };
 
   if (authLoading) {
@@ -289,6 +302,8 @@ export default function AdminPage() {
             <thead>
               <tr>
                 <th style={styles.th}>Name</th>
+                <th style={styles.th}>Display Name</th>
+                <th style={styles.th}>Phone</th>
                 <th style={styles.th}>Role</th>
                 <th style={styles.th}>Daily Limit</th>
                 <th style={styles.th}>Posted Today</th>
@@ -310,6 +325,28 @@ export default function AdminPage() {
                         </div>
                         <div style={{ fontSize: "12px", color: "#999" }}>{u.email}</div>
                       </div>
+                    </td>
+                    <td style={styles.td}>
+                      <input
+                        style={styles.inlineInput}
+                        defaultValue={u.display_name || ""}
+                        placeholder={u.full_name.split(" ")[0]}
+                        onBlur={(e) => {
+                          if (e.target.value !== (u.display_name || "")) updateField(u.id, "display_name", e.target.value);
+                        }}
+                        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                      />
+                    </td>
+                    <td style={styles.td}>
+                      <input
+                        style={styles.inlineInput}
+                        defaultValue={u.phone || ""}
+                        placeholder="Phone #"
+                        onBlur={(e) => {
+                          if (e.target.value !== (u.phone || "")) updateField(u.id, "phone", e.target.value);
+                        }}
+                        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                      />
                     </td>
                     <td style={styles.td}>
                       {isMe ? (
@@ -426,4 +463,5 @@ const styles: Record<string, React.CSSProperties> = {
   toggleBtn: { padding: "6px 14px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: 600, border: "none" },
   toggleBtnDisable: { background: "#fef2f2", color: "#dc2626" },
   toggleBtnEnable: { background: "#f0fdf4", color: "#16a34a" },
+  inlineInput: { padding: "4px 8px", borderRadius: "4px", border: "1px solid #ddd", fontSize: "13px", width: "120px" },
 };

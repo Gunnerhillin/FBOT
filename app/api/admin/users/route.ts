@@ -73,6 +73,8 @@ export async function PATCH(request: NextRequest) {
   if (typeof updates.is_active === "boolean") allowed.is_active = updates.is_active;
   if (typeof updates.daily_post_limit === "number") allowed.daily_post_limit = updates.daily_post_limit;
   if (updates.role === "admin" || updates.role === "salesperson") allowed.role = updates.role;
+  if (typeof updates.phone === "string") allowed.phone = updates.phone.trim() || null;
+  if (typeof updates.display_name === "string") allowed.display_name = updates.display_name.trim() || null;
 
   if (Object.keys(allowed).length === 0) {
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });

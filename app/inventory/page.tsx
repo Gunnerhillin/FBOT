@@ -351,6 +351,19 @@ export default function InventoryPage() {
     }
   };
 
+  // Refresh all posted listings (delete + re-post)
+  const refreshListings = async () => {
+    const res = await authFetch("/api/refresh-listings", { method: "POST" });
+    const data = await res.json();
+    if (data.error) {
+      showToast(data.error, "error");
+    } else {
+      showToast(`${data.refreshed} listings queued for refresh`, "success");
+      fetchVehicles();
+      fetchPostingStatus();
+    }
+  };
+
   // Photo navigation
   const nextPhoto = (id: number, total: number) => {
     setPhotoIndex((prev) => ({ ...prev, [id]: ((prev[id] || 0) + 1) % total }));
@@ -449,6 +462,15 @@ export default function InventoryPage() {
           <div style={styles.subHeaderRight}>
             <button style={styles.btnHeaderAction} onClick={queueAllReady}>
               Queue All for Me
+            </button>
+            <button
+              style={{ ...styles.btnHeaderAction, background: "#f59e0b", color: "#fff" }}
+              onClick={() => showConfirm(
+                "This will delete all your posted FB listings and re-post them fresh. Continue?",
+                refreshListings
+              )}
+            >
+              Refresh All Listings
             </button>
             {isAdmin && (
               <>
