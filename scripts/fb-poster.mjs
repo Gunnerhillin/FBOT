@@ -65,15 +65,11 @@ function getBrowserOptions(sessionDir, opts = {}) {
     "--single-process",
   ];
 
-  // On Railway, use system Chromium if set
-  const execPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
-
   if (IS_RAILWAY) {
     return {
       headless: true,
       viewport: { width: 1280, height: 900 },
       args: baseArgs,
-      executablePath: execPath,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       locale: "en-US",
@@ -1017,10 +1013,27 @@ async function postVehicleToMarketplace(page, vehicle) {
 
   try {
     await page.goto("https://www.facebook.com/marketplace/create/vehicle", {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
+      waitUntil: "networkidle",
+      timeout: 60000,
     });
-    await sleep(3000 + Math.random() * 1000);
+    await sleep(5000 + Math.random() * 2000);
+
+    // Dismiss any popups that loaded
+    await dismissPopups(page);
+    await sleep(1000);
+
+    // Scroll down and back up to trigger lazy-loaded elements
+    await page.evaluate(() => window.scrollBy(0, 300));
+    await sleep(1000);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await sleep(1000);
+
+    // Log what's on the page for debugging
+    const pageTitle = await page.title();
+    const pageUrl = page.url();
+    log(`  Page loaded: "${pageTitle}" — ${pageUrl}`);
+    const fileInputCount = await page.locator('input[type="file"]').count();
+    log(`  File inputs found on page: ${fileInputCount}`);
 
     // Upload Photos
     if (vehicle.photos && vehicle.photos.length > 0) {
@@ -1097,12 +1110,27 @@ async function postVehicleToMarketplace(page, vehicle) {
         }
 
         if (!fileInput) {
-          // Last resort: find ANY file input on the page
-          const allInputs = page.locator('input[type="file"]');
-          const count = await allInputs.count();
-          log(`  Total file inputs on page: ${count}`);
-          if (count > 0) {
-            fileInput = allInputs.first();
+          // Last resort: find ANY file input on the page via JS
+          const allInputCount = await page.evaluate(() => {
+            const inputs = document.querySelectorAll('input[type="file"]');
+            return inputs.length;
+          });
+          log(`  Total file inputs on page (via JS): ${allInputCount}`);
+
+          if (allInputCount > 0) {
+            fileInput = page.locator('input[type="file"]').first();
+          } else {
+            // Maybe the page didn't load the form — try reloading
+            log("  No file inputs found. Reloading page...");
+            await page.reload({ waitUntil: "networkidle", timeout: 60000 });
+            await sleep(5000);
+            await dismissPopups(page);
+
+            const retryCount = await page.locator('input[type="file"]').count();
+            log(`  File inputs after reload: ${retryCount}`);
+            if (retryCount > 0) {
+              fileInput = page.locator('input[type="file"]').first();
+            }
           }
         }
 
@@ -1121,12 +1149,21 @@ async function postVehicleToMarketplace(page, vehicle) {
               log(`  Partial photo upload succeeded`);
               await sleep(5000);
             } catch {
-              log(`  ERROR: Photo upload completely failed, continuing without photos`);
+              log(`  ERROR: Photo upload completely failed`);
+              await page.screenshot({ path: join(__dirname, "debug_upload_failed.png"), fullPage: true });
+              return { success: false, error: "Photo upload failed" };
             }
           }
         } else {
-          log(`  ERROR: No file input found on page. Continuing without photos.`);
+          log(`  ERROR: No file input found on page. Cannot post without photos.`);
           await page.screenshot({ path: join(__dirname, "debug_no_file_input.png"), fullPage: true });
+          // Dump page HTML for debugging
+          try {
+            const html = await page.content();
+            writeFileSync(join(__dirname, "debug_page.html"), html);
+            log("  Page HTML saved: debug_page.html");
+          } catch {}
+          return { success: false, error: "No file input found - photos required" };
         }
 
         for (const p of tempPaths) {
