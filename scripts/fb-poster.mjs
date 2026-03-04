@@ -1047,9 +1047,16 @@ async function postVehicleToMarketplace(page, vehicle) {
 
       if (tempPaths.length > 0) {
         log(`  Uploading ${tempPaths.length} photos in batch...`);
+        // Wait for file input to appear (may take longer on Railway headless)
         const fileInput = page.locator('input[type="file"][accept*="image"]').first();
-        await fileInput.setInputFiles(tempPaths);
-        await sleep(3000 + tempPaths.length * 300);
+        try {
+          await fileInput.waitFor({ state: "attached", timeout: 15000 });
+        } catch {
+          log("  WARNING: File input slow to appear, waiting extra...");
+          await sleep(5000);
+        }
+        await fileInput.setInputFiles(tempPaths, { timeout: 60000 });
+        await sleep(5000 + tempPaths.length * 500);
 
         for (const p of tempPaths) {
           try { unlinkSync(p); } catch {}
@@ -1165,7 +1172,10 @@ async function postVehicleToMarketplace(page, vehicle) {
 async function processUser(userProfile) {
   const userId = userProfile.id;
   const userName = userProfile.full_name;
-  const maxPosts = userProfile.daily_post_limit || DEFAULT_MAX_POSTS_PER_DAY;
+  // Env var MAX_POSTS_PER_DAY overrides profile setting (useful for testing)
+  const maxPosts = process.env.MAX_POSTS_PER_DAY
+    ? parseInt(process.env.MAX_POSTS_PER_DAY)
+    : (userProfile.daily_post_limit || DEFAULT_MAX_POSTS_PER_DAY);
   const sessionDir = getSessionDir(userId);
 
   console.log("");
