@@ -85,19 +85,26 @@ for (let i = 0; i < args.length; i++) {
 }
 
 // Load env
-if (!existsSync(ENV_PATH)) {
-  console.error("ERROR: .env.local not found");
-  process.exit(1);
-}
-const envContent = readFileSync(ENV_PATH, "utf-8");
-for (const line of envContent.split("\n")) {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.startsWith("#")) continue;
-  const eqIndex = trimmed.indexOf("=");
-  if (eqIndex === -1) continue;
-  const key = trimmed.slice(0, eqIndex).trim();
-  const value = trimmed.slice(eqIndex + 1).trim();
-  if (!process.env[key]) process.env[key] = value;
+if (IS_RAILWAY) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.error("ERROR: Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars");
+    process.exit(1);
+  }
+} else {
+  if (!existsSync(ENV_PATH)) {
+    console.error("ERROR: .env.local not found");
+    process.exit(1);
+  }
+  const envContent = readFileSync(ENV_PATH, "utf-8");
+  for (const line of envContent.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIndex = trimmed.indexOf("=");
+    if (eqIndex === -1) continue;
+    const key = trimmed.slice(0, eqIndex).trim();
+    const value = trimmed.slice(eqIndex + 1).trim();
+    if (!process.env[key]) process.env[key] = value;
+  }
 }
 
 const supabase = createClient(

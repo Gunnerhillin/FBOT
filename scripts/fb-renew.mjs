@@ -90,6 +90,13 @@ for (let i = 0; i < args.length; i++) {
 
 // ── Load env ──
 function loadEnv() {
+  if (IS_RAILWAY) {
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      console.error("ERROR: Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars");
+      process.exit(1);
+    }
+    return;
+  }
   if (!existsSync(ENV_PATH)) {
     console.error("ERROR: .env.local not found");
     process.exit(1);

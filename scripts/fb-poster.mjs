@@ -124,6 +124,14 @@ for (let i = 0; i < args.length; i++) {
 
 // ── Load env ──
 function loadEnv() {
+  // On Railway, env vars are set directly — no .env.local needed
+  if (IS_RAILWAY) {
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      console.error("ERROR: Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars");
+      process.exit(1);
+    }
+    return;
+  }
   if (!existsSync(ENV_PATH)) {
     console.error("ERROR: .env.local not found");
     process.exit(1);
@@ -1238,28 +1246,15 @@ async function processUser(userProfile) {
   return { posted, failed, skipped: false };
 }
 
-// ── Main Loop ──
-async function main() {
-  console.log("");
-  console.log("╔══════════════════════════════════════════════════╗");
-  console.log("║    FB Marketplace Auto-Poster (Multi-User)       ║");
-  console.log("║    Posting hours: 7AM - 2PM Mountain Time        ║");
-  console.log("║    Max 27 posts/day per user (10-15min delays)   ║");
-  console.log("╠══════════════════════════════════════════════════╣");
-  console.log("║    Press Ctrl+C to stop at any time              ║");
-  console.log("╚══════════════════════════════════════════════════╝");
-  console.log("");
-
-  // Wait for posting hours
-  await waitForPostingHours();
-
+// ── Single run cycle ──
+async function runCycle() {
   let usersToProcess = [];
 
   if (targetUserId) {
     const profile = await getUserProfile(targetUserId);
     if (!profile) {
       log(`ERROR: User ${targetUserId} not found.`);
-      process.exit(1);
+      return;
     }
     usersToProcess = [profile];
     log(`Single-user mode: ${profile.full_name}`);
@@ -1280,13 +1275,11 @@ async function main() {
 
   if (usersToProcess.length === 0) {
     log("No users with queued vehicles found.");
-    // Still run maintenance tasks
-    log("");
     const firstUser = targetUserId || null;
     await relistStaleListings(firstUser);
     await cleanupSoldListings(firstUser);
     await generateDailySummary(firstUser);
-    process.exit(0);
+    return;
   }
 
   console.log("");
@@ -1295,9 +1288,7 @@ async function main() {
   const results = {};
   for (const userProfile of usersToProcess) {
     try {
-      // Run stale listing refresh for this user before posting
       await relistStaleListings(userProfile.id);
-
       results[userProfile.full_name] = await processUser(userProfile);
     } catch (err) {
       log(`ERROR processing ${userProfile.full_name}: ${err.message}`);
@@ -1305,7 +1296,7 @@ async function main() {
     }
   }
 
-  // Post-processing: cleanup sold vehicles for each user
+  // Post-processing: cleanup sold vehicles
   for (const userProfile of usersToProcess) {
     try {
       await cleanupSoldListings(userProfile.id);
@@ -1333,9 +1324,47 @@ async function main() {
   log(`  TOTAL: ${totalPosted} posted, ${totalFailed} failed`);
   log("════════════════════════════════════════");
 
-  // Generate daily summary for each user
   for (const userProfile of usersToProcess) {
     await generateDailySummary(userProfile.id);
+  }
+}
+
+// ── Main ──
+async function main() {
+  console.log("");
+  console.log("╔══════════════════════════════════════════════════╗");
+  console.log("║    FB Marketplace Auto-Poster (Multi-User)       ║");
+  console.log("║    Posting hours: 7AM - 2PM Mountain Time        ║");
+  console.log("║    Max 27 posts/day per user (10-15min delays)   ║");
+  console.log("╠══════════════════════════════════════════════════╣");
+  console.log("║    Press Ctrl+C to stop at any time              ║");
+  console.log("╚══════════════════════════════════════════════════╝");
+  console.log("");
+
+  if (IS_RAILWAY) {
+    // On Railway: run as a long-lived service, checking every 30 minutes
+    log("Running in Railway mode (continuous loop)");
+    while (true) {
+      if (isWithinPostingHours()) {
+        log("Within posting hours — starting cycle...");
+        try {
+          await runCycle();
+        } catch (err) {
+          log(`Cycle error: ${err.message}`);
+        }
+        log("Cycle complete. Sleeping 30 minutes before next check...");
+        await sleep(30 * 60 * 1000);
+      } else {
+        const now = new Date();
+        const mt = new Date(now.toLocaleString("en-US", { timeZone: "America/Denver" }));
+        log(`Outside posting hours (7AM-2PM MT). Currently ${mt.toLocaleTimeString()}. Sleeping 15 minutes...`);
+        await sleep(15 * 60 * 1000);
+      }
+    }
+  } else {
+    // Local mode: run once and exit
+    await waitForPostingHours();
+    await runCycle();
   }
 }
 
