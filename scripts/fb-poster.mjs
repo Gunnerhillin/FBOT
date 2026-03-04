@@ -60,13 +60,19 @@ function getBrowserOptions(sessionDir, opts = {}) {
     "--no-sandbox",
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--single-process",
   ];
+
+  // On Railway, use system Chromium if set
+  const execPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
 
   if (IS_RAILWAY) {
     return {
       headless: true,
       viewport: { width: 1280, height: 900 },
       args: baseArgs,
+      executablePath: execPath,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       locale: "en-US",

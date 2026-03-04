@@ -1,28 +1,36 @@
 # ── FB Marketplace Poster Service (Headless) ──
-# Runs Playwright + Chromium headless on Railway.
+# Uses slim Node image + only Chromium (not the full Playwright image)
 
-FROM mcr.microsoft.com/playwright:v1.50.0-noble
+FROM node:20-slim
+
+# Install only Chromium dependencies (not full browsers)
+RUN apt-get update && apt-get install -y \
+    chromium \
+    fonts-liberation \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libdrm2 \
+    libxkbcommon0 \
+    libgbm1 \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Tell Playwright to use system Chromium instead of downloading its own
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 WORKDIR /app
 
-# Cache bust: v5
-RUN echo "bust cache v5"
-
-# Copy only what the poster needs
+# Copy and install
 COPY package-poster.json ./package.json
 COPY scripts/ ./scripts/
-
-# Install poster dependencies
 RUN npm install
 
-# Create session directories for multi-user
+# Create session directories
 RUN mkdir -p /app/.fb-sessions /app/.fb-session
 
-# Set Railway indicator env var
+# Railway env
 ENV RAILWAY_HEADLESS=true
-
-# Expose the health check port
 EXPOSE 3000
 
-# Default: run via Railway starter (starts health check first, then poster)
 CMD ["node", "scripts/railway-start.mjs"]
