@@ -151,9 +151,21 @@ function loadEnv() {
   }
 }
 
-// Early startup log so Railway shows SOMETHING
+// ── VERY FIRST THING: Start health check server on Railway ──
+// This MUST happen before anything else so Railway sees the container as alive
 console.log("[STARTUP] FB Poster starting...");
 console.log(`[STARTUP] IS_RAILWAY=${IS_RAILWAY}`);
+
+if (IS_RAILWAY) {
+  const PORT = process.env.PORT || 3000;
+  createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", service: "fb-poster", time: new Date().toISOString() }));
+  }).listen(PORT, () => {
+    console.log(`[STARTUP] Health check server listening on port ${PORT}`);
+  });
+}
+
 console.log(`[STARTUP] SUPABASE_URL set: ${!!process.env.SUPABASE_URL}`);
 console.log(`[STARTUP] SUPABASE_SERVICE_ROLE_KEY set: ${!!process.env.SUPABASE_SERVICE_ROLE_KEY}`);
 
@@ -1336,18 +1348,6 @@ async function runCycle() {
   for (const userProfile of usersToProcess) {
     await generateDailySummary(userProfile.id);
   }
-}
-
-// ── Health check server for Railway ──
-// Railway needs a listening port to consider the container healthy
-if (IS_RAILWAY) {
-  const PORT = process.env.PORT || 3000;
-  createServer((req, res) => {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", service: "fb-poster" }));
-  }).listen(PORT, () => {
-    console.log(`[STARTUP] Health check server on port ${PORT}`);
-  });
 }
 
 // ── Main ──

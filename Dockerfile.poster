@@ -1,13 +1,12 @@
 # ── FB Marketplace Poster Service (Headless) ──
 # Runs Playwright + Chromium headless on Railway.
-# No VNC/desktop needed — pure headless with stealth args.
 
 FROM mcr.microsoft.com/playwright:v1.50.0-noble
 
 WORKDIR /app
 
-# Cache bust: v3
-RUN echo "bust cache v3"
+# Cache bust: v4
+RUN echo "bust cache v4"
 
 # Copy only what the poster needs
 COPY package-poster.json ./package.json
@@ -21,6 +20,9 @@ RUN mkdir -p /app/.fb-sessions /app/.fb-session
 
 # Set Railway indicator env var
 ENV RAILWAY_HEADLESS=true
+
+# Expose the health check port
+EXPOSE 3000
 
 # Default: run the poster
 CMD ["node", "scripts/fb-poster.mjs"]
